@@ -1,0 +1,17 @@
+[Unit]
+Description=Network Monitor Web Dashboard
+After=network-online.target net_monitor.service
+Wants=net_monitor.service
+
+[Service]
+Type=simple
+User=li
+Group=li
+ExecStart=/usr/bin/python3 /home/li/net_monitor_web.py
+Restart=on-failure
+RestartSec=10
+PIDFile=/home/li/net_monitor_web.pid
+WorkingDirectory=/home/li
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Webhook 告警配置 - net_monitor</title>
+<style>
+:root { --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --border: #30363d; --text: #e6edf3; --text2: #8b949e; --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --radius: 8px; }
+* { margin:0; padding:0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.topbar h1 { font-size: 16px; font-weight: 600; }
+.topbar .back { color: var(--blue); text-decoration: none; font-size: 13px; }
+.topbar .back:hover { text-decoration: underline; }
+.container { max-width: 600px; margin: 40px auto; padding: 0 24px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 16px; }
+.card h2 { font-size: 14px; color: var(--text2); margin-bottom: 16px; font-weight: 600; }
+.form-group { margin-bottom: 18px; }
+.form-group label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
+.form-group input[type="text"], .form-group input[type="url"], .form-group select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 12px; border-radius: var(--radius); font-size: 13px; font-family: var(--mono);
+}
+.btn { padding: 10px 20px; border-radius: var(--radius); border: none; font-size: 13px; cursor: pointer; font-weight: 600; }
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.status-msg { padding: 12px 16px; border-radius: var(--radius); font-size: 13px; margin-top: 12px; display: none; }
+.status-msg.ok { display: block; background: rgba(63,185,80,.12); color: var(--green); border: 1px solid rgba(63,185,80,.2); }
+.status-msg.err { display: block; background: rgba(248,81,73,.12); color: var(--red); border: 1px solid rgba(248,81,73,.2); }
+</style>
+</head>
+<body>
+<div class="topbar"><h1>⚡ Webhook 告警配置</h1><a href="/" class="back">← 返回仪表盘</a></div>
+<div class="container">
+<div class="card">
+    <h2>告警通道</h2>
+    <div class="form-group"><label>Webhook URL</label><input type="url" id="webhookUrl" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxxx"></div>
+    <div class="form-group"><label>平台类型</label><select id="webhookPlatform" onchange="onPlatformChange()"><option value="generic">通用 JSON</option><option value="feishu">飞书</option><option value="dingtalk">钉钉</option><option value="wecom">企业微信</option></select></div>
+    <div class="form-group" id="secretGroup" style="display:none"><label>加签密钥 (钉钉)</label><input type="password" id="webhookSecret" placeholder="含SEC前缀，如：SECxxxxxxxx"><small style="color:#e67e22;font-size:12px;display:block;margin-top:4px">⚠️ 密钥必须包含「SEC」前缀（在钉钉机器人安全设置中复制完整密钥）</small></div>
+    <div class="form-group" style="display:flex;align-items:center;gap:10px"><input type="checkbox" id="webhookEnabled" checked><label for="webhookEnabled">启用告警</label></div>
+    <div style="display:flex;gap:10px;margin-top:20px">
+        <button class="btn btn-primary" onclick="saveConfig()">💾 保存</button>
+        <button class="btn btn-secondary" onclick="testWebhook()">📡 测试</button>
+    </div>
+    <div id="statusMsg" class="status-msg"></div>
+</div>
+</div>
+<script>
+function onPlatformChange() {
+    const plat = document.getElementById('webhookPlatform').value;
+    document.getElementById('secretGroup').style.display = plat === 'dingtalk' ? 'block' : 'none';
+}
+function showStatus(msg, ok) {
+    const el = document.getElementById('statusMsg');
+    el.textContent = msg; el.className = 'status-msg ' + (ok ? 'ok' : 'err');
+}
+function apiFetch(url, opts) {
+    return fetch(url, opts).then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + r.statusText);
+        return r.json();
+    });
+}
+function loadConfig() {
+    apiFetch('/api/webhook').then(d=>{
+        document.getElementById('webhookUrl').value = d.url||'';
+        document.getElementById('webhookPlatform').value = d.platform||'generic';
+        document.getElementById('webhookSecret').value = d.secret||'';
+        document.getElementById('webhookEnabled').checked = d.enabled!==false;
+        onPlatformChange();
+    }).catch(()=>{});
+}
+function saveConfig() {
+    const url=document.getElementById('webhookUrl').value.trim();
+    const platform=document.getElementById('webhookPlatform').value;
+    const secret=document.getElementById('webhookSecret').value.trim();
+    const enabled=document.getElementById('webhookEnabled').checked;
+    if(!url){showStatus('URL不能为空',false);return;}
+    apiFetch('/api/webhook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,platform,secret,enabled})})
+        .then(d=>showStatus(d.message,d.success)).catch(e=>showStatus('保存失败: '+e.message,false));
+}
+function testWebhook(){
+    const btn=document.querySelector('button[onclick="testWebhook()"]');
+    btn.disabled=true; btn.textContent='发送中...';
+    apiFetch('/api/webhook-test').then(d=>showStatus(d.message,d.success)).catch(e=>showStatus('失败: '+e.message,false)).finally(()=>{btn.disabled=false;btn.textContent='📡 发送测试';});
+}
+loadConfig();
+</script>
+</body>
+</html>

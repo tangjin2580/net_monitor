@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>服务管理 — 网络监控</title>
+<style>
+:root {
+    --bg: #0a0c15; --surface: rgba(22,27,42,.7); --surface2: rgba(30,36,56,.55);
+    --border: rgba(113,119,144,.2); --text: #e6edf3; --text2: #8b949e;
+    --green: #4ade80; --red: #f87171; --yellow: #facc15; --blue: #60a5fa;
+    --green-bg: rgba(63,185,80,.12); --red-bg: rgba(248,81,73,.12);
+    --yellow-bg: rgba(210,153,34,.12); --blue-bg: rgba(88,166,255,.12);
+    --radius: 12px; --mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.topbar { display:flex; align-items:center; justify-content:space-between;
+          padding:12px 24px; background:var(--surface); border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px; }
+.topbar h1 { font-size:16px; font-weight:600; }
+.topbar .actions { display:flex; gap:8px; }
+.topbar .actions a { color:var(--text2); text-decoration:none; font-size:12px; padding:6px 14px;
+                      border:1px solid var(--border); border-radius:var(--radius); }
+.topbar .actions a:hover { border-color:var(--blue); color:var(--text); }
+
+.container { max-width:900px; margin:0 auto; padding:24px; }
+
+.status-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:20px; }
+.status-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; }
+.status-card .label { font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); margin-bottom:4px; }
+.status-card .value { font-size:22px; font-weight:700; font-family:var(--mono); }
+.status-card .sub { font-size:11px; color:var(--text2); margin-top:4px; }
+.status-card.online { border-left: 3px solid var(--green); }
+.status-card.offline { border-left: 3px solid var(--red); }
+.c-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+.c-dot.on { background:var(--green); }
+.c-dot.off { background:var(--red); }
+
+.log-box { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+            max-height:420px; overflow-y:auto; font-family:var(--mono); font-size:11px; line-height:1.6; padding:12px; }
+.log-box::-webkit-scrollbar { width:6px; }
+.log-box::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+.log-line { white-space:pre-wrap; word-break:break-all; }
+.log-ok { color:var(--green); }
+
+.ctrl-row { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+.btn { padding:8px 20px; border-radius:var(--radius); border:1px solid var(--border);
+        background:var(--surface2); color:var(--text); cursor:pointer; font-size:13px; }
+.btn:hover { border-color:var(--blue); }
+.btn.start { border-color:var(--green); color:var(--green); }
+.btn.stop { border-color:var(--red); color:var(--red); }
+.btn.restart { border-color:var(--yellow); color:var(--yellow); }
+.btn:disabled { opacity:.4; cursor:wait; }
+
+.section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px; margin-bottom:16px; }
+.section h3 { font-size:13px; color:var(--text2); margin-bottom:12px; }
+  .topbar,.section,.card,.container .card,.status-card { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  body { font-family: "Poppins", sans-serif; -webkit-font-smoothing: antialiased; background: #0a0c15; background-image: radial-gradient(ellipse 100% 50% at 50% -30%, rgba(96,165,250,.12) 0%, transparent 50%), radial-gradient(ellipse 60% 30% at 90% 100%, rgba(74,222,128,.06) 0%, transparent 50%); background-attachment: fixed; color: var(--text); }
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: rgba(113,119,144,.3); border-radius: 10px; }
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .section, .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+</style>
+</head>
+<body>
+<div class="topbar">
+    <h1>🔧 服务管理</h1>
+    <div class="actions">
+        <a href="/dashboard.html">← 仪表盘</a>
+        <a href="/ikuai.html">📡 爱快</a>
+        <a href="/config.html">⚙️ 配置</a>
+        <a href="/ftp_config.html">📁 FTP</a>
+    </div>
+</div>
+
+<div class="container">
+    <div class="status-row" id="statusRow"></div>
+
+    <div class="section">
+        <h3>⚡ 监控脚本控制</h3>
+        <div class="ctrl-row">
+            <button class="btn start" onclick="ctl('start')">▶ 启动</button>
+            <button class="btn stop" onclick="ctl('stop')">⏹ 停止</button>
+            <button class="btn restart" onclick="ctl('restart')">🔄 重启</button>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>🖥 Web 仪表盘控制</h3>
+        <div class="ctrl-row">
+            <button class="btn restart" onclick="webCtl('restart')">🔄 重启 Web</button>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>📋 最近日志 <span id="logHint" style="font-size:11px;color:var(--text2);margin-left:8px"></span></h3>
+        <div class="log-box" id="logBox"></div>
+    </div>
+</div>
+
+<script>
+function esc(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function refreshStatus() {
+    var r = await fetch('/api/status');
+    var d = await r.json();
+    var mon = d.monitor_running;
+    var now = new Date().toLocaleTimeString('zh-CN');
+
+    document.getElementById('statusRow').innerHTML = [
+        '<div class="status-card ' + (mon ? 'online' : 'offline') + '">' +
+            '<div class="label">监控脚本</div>' +
+            '<div class="value"><span class="c-dot ' + (mon ? 'on' : 'off') + '"></span>' + (mon ? '在线' : '离线') + '</div>' +
+            '<div class="sub">PID: ' + (d.monitor_pid || '—') + '</div>' +
+        '</div>',
+        '<div class="status-card online">' +
+            '<div class="label">Web 仪表盘</div>' +
+            '<div class="value"><span class="c-dot on"></span>在线</div>' +
+            '<div class="sub">PID: ' + d.web_pid + '</div>' +
+        '</div>',
+        '<div class="status-card ' + (d.last_heartbeat ? 'online' : 'offline') + '">' +
+            '<div class="label">最后心跳</div>' +
+            '<div class="value" style="font-size:13px">' + (d.last_heartbeat ? d.last_heartbeat.split(' ')[1] : '—') + '</div>' +
+            '<div class="sub">' + (d.last_heartbeat ? d.last_heartbeat.slice(0,10) : '无') + '</div>' +
+        '</div>',
+        '<div class="status-card online">' +
+            '<div class="label">断开事件</div>' +
+            '<div class="value">' + (d.disconnect_events || 0) + '</div>' +
+            '<div class="sub">累计</div>' +
+        '</div>',
+    ].join('');
+}
+
+async function ctl(action) {
+    if (!confirm('确定要' + ({start:'启动',stop:'停止',restart:'重启'})[action] + '监控脚本吗？')) return;
+    disableBtns(true);
+    try {
+        var r = await fetch('/api/control?action=' + action);
+        var d = await r.json();
+        showLog(d.message || (action + ' 完成'), d.success ? 'ok' : 'fail');
+    } catch(e) {
+        showLog(action + ' 失败: ' + e.message, 'fail');
+    }
+    disableBtns(false);
+    setTimeout(refreshStatus, 2000);
+}
+
+async function webCtl(action) {
+    if (!confirm('确定要重启 Web 仪表盘吗？页面将短暂不可用。')) return;
+    showLog('Web 重启中...', 'ok');
+    try {
+        await fetch('/api/control?action=web-restart&_=' + Date.now());
+    } catch(e) {}
+    // Web 重启后当前连接断开，等几秒后刷新
+    setTimeout(function(){ location.reload(); }, 3000);
+}
+
+function disableBtns(on) {
+    document.querySelectorAll('.btn').forEach(function(b) { b.disabled = on; });
+}
+
+function showLog(msg, type) {
+    var box = document.getElementById('logBox');
+    var now = new Date().toLocaleTimeString('zh-CN');
+    var cls = type === 'ok' ? 'log-ok' : '';
+    box.innerHTML = '<div class="log-line ' + cls + '">[' + now + '] ' + esc(msg) + '</div>' + box.innerHTML;
+}
+
+async function loadLogs() {
+    try {
+        var r = await fetch('/api/logs?limit=60');
+        var logs = await r.json();
+        var html = logs.slice(-40).reverse().map(function(l) {
+            var lvl = l.level || 'INFO';
+            var cls = lvl === 'ERROR' ? ' style="color:var(--red)"' : lvl === 'WARN' ? ' style="color:var(--yellow)"' : '';
+            return '<div class="log-line"' + cls + '>' +
+                esc((l.ts || '').split('.')[0]) + ' ' +
+                esc(lvl).padEnd(6) + ' ' +
+                esc(l.msg || '') +
+            '</div>';
+        }).join('');
+        document.getElementById('logBox').innerHTML = html || '<span style="color:var(--text2)">暂无日志</span>';
+        document.getElementById('logHint').textContent = '共 ' + logs.length + ' 条';
+    } catch(e) {
+        document.getElementById('logBox').innerHTML = '<span style="color:var(--red)">加载失败</span>';
+    }
+}
+
+refreshStatus();
+loadLogs();
+setInterval(refreshStatus, 10000);
+setInterval(loadLogs, 30000);
+</script>
+</body>
+</html>

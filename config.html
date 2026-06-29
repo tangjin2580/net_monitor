@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>监控配置 — 网络监控</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='%2358a6ff' stroke-width='2' opacity='.4'/%3E%3Cpath d='M32 12v8m0 24v8M12 32h8m24 0h8' stroke='%23d29922' stroke-width='2.5'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%2358a6ff'/%3E%3C/svg%3E">
+<style>
+:root {
+    --bg: #0a0c15; --surface: rgba(22,27,42,.7); --surface2: rgba(30,36,56,.55);
+    --border: rgba(113,119,144,.2); --text: #e6edf3; --text2: #8b949e;
+    --green: #4ade80; --red: #f87171; --yellow: #facc15; --blue: #60a5fa;
+    --green-bg: rgba(63,185,80,.12); --red-bg: rgba(248,81,73,.12);
+    --yellow-bg: rgba(210,153,34,.12); --blue-bg: rgba(88,166,255,.12);
+    --radius: 12px; --mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.topbar { display:flex; align-items:center; justify-content:space-between;
+          padding:12px 24px; background:var(--surface); border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px; }
+.topbar h1 { font-size:16px; font-weight:600; display:flex; align-items:center; gap:8px; }
+.topbar .actions { display:flex; gap:8px; }
+.topbar a { color:var(--text2); text-decoration:none; font-size:12px; padding:6px 14px;
+            border:1px solid var(--border); border-radius:var(--radius); }
+.topbar a:hover { border-color:var(--blue); color:var(--text); }
+
+.container { max-width:860px; margin:0 auto; padding:24px; }
+.section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px; margin-bottom:16px; }
+.section h2 { font-size:14px; font-weight:600; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
+.section h2 .desc { font-size:11px; color:var(--text2); font-weight:400; margin-left:8px; }
+
+.field-row { display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; align-items:end; }
+.field { flex:1; min-width:140px; }
+.field label { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); margin-bottom:4px; }
+.field input { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px;
+               color:var(--text); padding:7px 10px; font-size:13px; font-family:var(--mono); }
+.field input:focus { outline:none; border-color:var(--blue); }
+.field .remove-btn { background:none; border:none; color:var(--red); cursor:pointer; font-size:16px; padding:0 4px; }
+.field .remove-btn:hover { opacity:.7; }
+
+.tag-list { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.tag { background:var(--surface2); border:1px solid var(--border); border-radius:12px; padding:3px 10px;
+       font-size:12px; font-family:var(--mono); display:flex; align-items:center; gap:6px; }
+.tag .rem { color:var(--red); cursor:pointer; font-size:14px; line-height:1; }
+.tag .rem:hover { opacity:.7; }
+
+.add-row { margin-top:8px; display:flex; gap:8px; }
+.add-row input { background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text2);
+                  padding:5px 10px; font-size:12px; font-family:var(--mono); flex:1; }
+.add-row input:focus { outline:none; border-color:var(--blue); }
+.add-row button, .btn { background:var(--surface2); border:1px solid var(--border); color:var(--text);
+                        padding:5px 14px; border-radius:var(--radius); cursor:pointer; font-size:12px; }
+.add-row button:hover, .btn:hover { border-color:var(--blue); }
+.btn.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
+.btn.primary:hover { opacity:.85; }
+.btn-row { display:flex; gap:10px; margin-top:16px; flex-wrap:wrap; }
+
+.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(60px); padding:10px 24px;
+         border-radius:var(--radius); font-size:13px; z-index:999; opacity:0; transition:.3s; pointer-events:none; }
+.toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
+.toast.ok { background:var(--green-bg); border:1px solid var(--green); color:var(--green); }
+.toast.err { background:var(--red-bg); border:1px solid var(--red); color:var(--red); }
+
+.hint { font-size:11px; color:var(--text2); margin-top:12px; padding:10px; background:var(--surface2); border-radius:6px; }
+.hint code { color:var(--yellow); }
+  .topbar,.section,.card,.container .card,.status-card { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  body { font-family: "Poppins", sans-serif; -webkit-font-smoothing: antialiased; background: #0a0c15; background-image: radial-gradient(ellipse 100% 50% at 50% -30%, rgba(96,165,250,.12) 0%, transparent 50%), radial-gradient(ellipse 60% 30% at 90% 100%, rgba(74,222,128,.06) 0%, transparent 50%); background-attachment: fixed; color: var(--text); }
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: rgba(113,119,144,.3); border-radius: 10px; }
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .section, .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+    <h1>⚙️ 监控配置</h1>
+    <div class="actions">
+        <a href="/dashboard.html">← 仪表盘</a>
+        <a href="/admin.html">🔧 管理</a>
+        <a href="/ikuai.html">📡 爱快</a>
+        <a href="/ftp_config.html">📁 FTP</a>
+        <a href="/webhook.html">🔔 钉钉</a>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- 网关 -->
+    <div class="section">
+        <h2>🏠 网关</h2>
+        <div class="field-row">
+            <div class="field"><label>接口名称</label><input id="gwIface" placeholder="ens18"></div>
+            <div class="field"><label>网关 IPv4</label><input id="gwV4" placeholder="192.168.31.254"></div>
+            <div class="field"><label>网关 IPv6</label><input id="gwV6" placeholder="fe80::...%ens18"></div>
+        </div>
+    </div>
+
+    <!-- 外网目标 -->
+    <div class="section">
+        <h2>🌐 外网检测目标</h2>
+        <div class="field-row">
+            <div class="field"><label>DNS 检测域名</label><input id="dnsHost" placeholder="www.baidu.com"></div>
+        </div>
+        <div style="margin-bottom:8px"><span style="font-size:11px;color:var(--text2);">IPv4 Ping 目标:</span></div>
+        <div class="tag-list" id="v4Tags"></div>
+        <div class="add-row"><input id="v4Input" placeholder="添加 IPv4 地址..." onkeydown="if(event.key==='Enter')addTag('v4')"><button onclick="addTag('v4')">+ 添加</button></div>
+        <div style="margin-bottom:8px;margin-top:12px"><span style="font-size:11px;color:var(--text2);">IPv6 Ping 目标:</span></div>
+        <div class="tag-list" id="v6Tags"></div>
+        <div class="add-row"><input id="v6Input" placeholder="添加 IPv6 地址..." onkeydown="if(event.key==='Enter')addTag('v6')"><button onclick="addTag('v6')">+ 添加</button></div>
+        <div style="margin-bottom:8px;margin-top:12px"><span style="font-size:11px;color:var(--text2);">HTTP 延迟检测 (HTTPS URL):</span></div>
+        <div class="tag-list" id="httpTags"></div>
+        <div class="add-row"><input id="httpInput" placeholder="https://example.com" onkeydown="if(event.key==='Enter')addTag('http')"><button onclick="addTag('http')">+ 添加</button></div>
+    </div>
+
+    <!-- 内网设备 -->
+    <div class="section">
+        <h2>🖥 内网设备 <span class="desc">Ping 检测在线状态</span></h2>
+        <div id="lanHosts"></div>
+        <div class="add-row" style="margin-top:10px">
+            <input id="lanName" placeholder="设备名称"><input id="lanIP" placeholder="IP 地址" onkeydown="if(event.key==='Enter')addLan()">
+            <button onclick="addLan()">+ 添加设备</button>
+        </div>
+    </div>
+
+    <!-- DNS -->
+    <div class="section">
+        <h2>🔍 DNS 诊断</h2>
+        <div class="field-row">
+            <div class="field"><label>解析器</label><input id="dnsResolver" placeholder="223.5.5.5"></div>
+        </div>
+        <div style="margin-bottom:8px;margin-top:4px"><span style="font-size:11px;color:var(--text2);">DNS 服务器 (Ping 检测):</span></div>
+        <div class="tag-list" id="dnsServers"></div>
+        <div class="add-row"><input id="dnsServerInput" placeholder="添加 DNS 服务器 IP..." onkeydown="if(event.key==='Enter')addTag('dnsServer')"><button onclick="addTag('dnsServer')">+ 添加</button></div>
+        <div style="margin-bottom:8px;margin-top:12px"><span style="font-size:11px;color:var(--text2);">域名解析检测:</span></div>
+        <div id="dnsDomains" style="display:flex;flex-direction:column;gap:4px"></div>
+        <div class="add-row" style="margin-top:8px">
+            <input id="domainName" placeholder="名称 (如: 百度)"><input id="domainHost" placeholder="域名 (如: www.baidu.com)" onkeydown="if(event.key==='Enter')addDomain()">
+            <button onclick="addDomain()">+ 添加</button>
+        </div>
+    </div>
+
+    <div class="btn-row">
+        <button class="btn primary" onclick="save()">💾 保存配置</button>
+        <button class="btn" onclick="loadConfig()">🔄 重新加载</button>
+        <button class="btn" id="btn-restart" onclick="restartMonitor()" style="border-color:var(--yellow);color:var(--yellow);">🔁 重启监控</button>
+    </div>
+    <div class="hint">
+        💡 修改配置后点「💾 保存」→「🔁 重启监控」即可生效。<br>
+        或手动执行: <code>kill $(cat /home/li/net_monitor.pid); nohup bash /home/li/net_monitor.sh &</code>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var cfg = {};
+
+async function loadConfig() {
+    try {
+        var r = await fetch('/api/monitor_targets');
+        cfg = await r.json();
+    } catch(e) { toast('加载失败: ' + e.message, 'err'); return; }
+
+    var gw = cfg.gateway || {};
+    qv('gwIface', gw.iface || '');
+    qv('gwV4', gw.v4 || '');
+    qv('gwV6', gw.v6 || '');
+
+    var wan = cfg.wan || {};
+    qv('dnsHost', wan.dns_host || '');
+    renderTags('v4Tags', wan.v4_targets || [], 'v4', 'IPv4');
+    renderTags('v6Tags', wan.v6_targets || [], 'v6', 'IPv6');
+    renderTags('httpTags', wan.http_targets || [], 'http', 'HTTP');
+
+    var lan = cfg.lan || {};
+    renderLanHosts(lan.hosts || []);
+
+    var dns = cfg.dns || {};
+    qv('dnsResolver', dns.resolver || '');
+    renderTags('dnsServers', dns.servers || [], 'dnsServer', 'DNS');
+    renderDomains(dns.domains || []);
+    toast('已重新加载', 'ok');
+}
+
+function qv(id, val) { document.getElementById(id).value = val; }
+
+function renderTags(containerId, items, key, label) {
+    var html = items.map(function(t, i) {
+        return '<span class="tag">' + esc(t) + '<span class="rem" onclick="removeTag(\'' + key + '\',' + i + ')">×</span></span>';
+    }).join('');
+    document.getElementById(containerId).innerHTML = html || '<span style="font-size:11px;color:var(--text2);">暂无 ' + label + ' 目标</span>';
+}
+
+function removeTag(key, idx) {
+    var list = getList(key);
+    list.splice(idx, 1);
+    setList(key, list);
+    renderSection(key, list);
+}
+
+function addTag(key) {
+    var inp = document.getElementById(key + 'Input');
+    var val = inp.value.trim();
+    if (!val) return;
+    var list = getList(key);
+    if (list.indexOf(val) >= 0) { inp.value = ''; return; }
+    list.push(val);
+    setList(key, list);
+    inp.value = '';
+    renderSection(key, list);
+}
+
+function getList(key) {
+    switch(key) {
+        case 'v4': return (cfg.wan || (cfg.wan={})).v4_targets || ((cfg.wan||{}).v4_targets = []);
+        case 'v6': return (cfg.wan || (cfg.wan={})).v6_targets || ((cfg.wan||{}).v6_targets = []);
+        case 'http': return (cfg.wan || (cfg.wan={})).http_targets || ((cfg.wan||{}).http_targets = []);
+        case 'dnsServer': return (cfg.dns || (cfg.dns={})).servers || ((cfg.dns||{}).servers = []);
+    }
+    return [];
+}
+
+function setList(key, list) {
+    switch(key) {
+        case 'v4': (cfg.wan||(cfg.wan={})).v4_targets = list; break;
+        case 'v6': (cfg.wan||(cfg.wan={})).v6_targets = list; break;
+        case 'http': (cfg.wan||(cfg.wan={})).http_targets = list; break;
+        case 'dnsServer': (cfg.dns||(cfg.dns={})).servers = list; break;
+    }
+}
+
+function renderSection(key, list) {
+    var map = {v4:['v4Tags','IPv4'], v6:['v6Tags','IPv6'], http:['httpTags','HTTP'], dnsServer:['dnsServers','DNS']};
+    var m = map[key]; if (m) renderTags(m[0], list, key, m[1]);
+}
+
+function renderLanHosts(hosts) {
+    var html = hosts.map(function(h, i) {
+        return '<div class="field-row" style="margin-bottom:6px">' +
+            '<div class="field"><label>名称</label><input value="' + esc(h.name||'') + '" onchange="updateLan(' + i + ',\'name\',this.value)"></div>' +
+            '<div class="field"><label>IP 地址</label><input value="' + esc(h.ip||'') + '" onchange="updateLan(' + i + ',\'ip\',this.value)"></div>' +
+            '<div class="field" style="max-width:60px;flex:0 0 60px;align-self:end;padding-bottom:2px"><button class="remove-btn" onclick="removeLan(' + i + ')" title="删除">×</button></div>' +
+        '</div>';
+    }).join('');
+    document.getElementById('lanHosts').innerHTML = html || '<span style="font-size:11px;color:var(--text2);">暂无内网设备</span>';
+}
+
+function updateLan(idx, key, val) {
+    (cfg.lan || (cfg.lan={})).hosts[idx][key] = val;
+}
+
+function removeLan(idx) {
+    (cfg.lan || (cfg.lan={})).hosts.splice(idx, 1);
+    renderLanHosts(cfg.lan.hosts || []);
+}
+
+function addLan() {
+    var name = document.getElementById('lanName').value.trim();
+    var ip = document.getElementById('lanIP').value.trim();
+    if (!name || !ip) return;
+    (cfg.lan || (cfg.lan={})).hosts = (cfg.lan.hosts || []);
+    cfg.lan.hosts.push({name:name, ip:ip, check:'ping'});
+    document.getElementById('lanName').value = '';
+    document.getElementById('lanIP').value = '';
+    renderLanHosts(cfg.lan.hosts);
+}
+
+function renderDomains(domains) {
+    var html = domains.map(function(d, i) {
+        return '<div class="field-row" style="margin-bottom:4px">' +
+            '<div class="field"><label>名称</label><input value="' + esc(d.name||'') + '" onchange="updateDomain(' + i + ',\'name\',this.value)"></div>' +
+            '<div class="field"><label>域名</label><input value="' + esc(d.domain||'') + '" onchange="updateDomain(' + i + ',\'domain\',this.value)"></div>' +
+            '<div class="field" style="max-width:60px;flex:0 0 60px;align-self:end;padding-bottom:2px"><button class="remove-btn" onclick="removeDomain(' + i + ')" title="删除">×</button></div>' +
+        '</div>';
+    }).join('');
+    document.getElementById('dnsDomains').innerHTML = html || '<span style="font-size:11px;color:var(--text2);">暂无域名</span>';
+}
+
+function updateDomain(idx, key, val) {
+    (cfg.dns || (cfg.dns={})).domains[idx][key] = val;
+}
+
+function removeDomain(idx) {
+    (cfg.dns || (cfg.dns={})).domains.splice(idx, 1);
+    renderDomains(cfg.dns.domains || []);
+}
+
+function addDomain() {
+    var name = document.getElementById('domainName').value.trim();
+    var domain = document.getElementById('domainHost').value.trim();
+    if (!name || !domain) return;
+    (cfg.dns || (cfg.dns={})).domains = (cfg.dns.domains || []);
+    cfg.dns.domains.push({name:name, domain:domain});
+    document.getElementById('domainName').value = '';
+    document.getElementById('domainHost').value = '';
+    renderDomains(cfg.dns.domains);
+}
+
+function buildConfig() {
+    // 从表单更新 cfg (列表型字段已在操作时实时更新)
+    cfg.gateway = cfg.gateway || {};
+    cfg.gateway.iface = document.getElementById('gwIface').value.trim();
+    cfg.gateway.v4 = document.getElementById('gwV4').value.trim();
+    cfg.gateway.v6 = document.getElementById('gwV6').value.trim();
+
+    cfg.wan = cfg.wan || {};
+    cfg.wan.dns_host = document.getElementById('dnsHost').value.trim();
+
+    cfg.dns = cfg.dns || {};
+    cfg.dns.resolver = document.getElementById('dnsResolver').value.trim();
+
+    cfg.version = (cfg.version || 0) + 1;
+    return cfg;
+}
+
+async function save() {
+    var data = buildConfig();
+    try {
+        var r = await fetch('/api/monitor_targets', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        var d = await r.json();
+        toast(d.success ? '保存成功！点击「🔁 重启监控」使配置生效' : ('保存失败: ' + (d.message||'')), d.success ? 'ok' : 'err');
+    } catch(e) {
+        toast('请求失败: ' + e.message, 'err');
+    }
+}
+
+async function restartMonitor() {
+    var btn = document.getElementById('btn-restart');
+    if (!confirm('确定要重启监控服务吗？重启过程中会有短暂中断。')) return;
+    btn.disabled = true; btn.textContent = '重启中...';
+    try {
+        var r = await fetch('/api/control?action=restart');
+        var d = await r.json();
+        toast(d.message || '重启完成', 'ok');
+    } catch(e) {
+        toast('重启失败: ' + e.message, 'err');
+    }
+    btn.disabled = false; btn.textContent = '🔁 重启监控';
+}
+
+function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+var toastTimer = null;
+function toast(msg, type) {
+    var t = document.getElementById('toast');
+    t.textContent = msg; t.className = 'toast show ' + (type||'');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.className = 'toast '+(type||''); }, 4000);
+}
+
+loadConfig();
+</script>
+</body>
+</html>

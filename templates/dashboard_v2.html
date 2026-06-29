@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络监控仪表盘 v2</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%2358a6ff'/%3E%3Cstop offset='100%25' stop-color='%233fb950'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='url(%23g)' stroke-width='2.5' opacity='.3'/%3E%3Ccircle cx='32' cy='32' r='14' fill='none' stroke='url(%23g)' stroke-width='2' opacity='.5'/%3E%3Cpath d='M8 32h14l4-12 6 24 6-18 4 6h14' fill='none' stroke='url(%23g)' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
+    --border: #30363d; --text: #e6edf3; --text2: #8b949e;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff;
+    --green-bg: rgba(63,185,80,.12); --red-bg: rgba(248,81,73,.12);
+    --yellow-bg: rgba(210,153,34,.12);
+    --radius: 8px; --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+* { margin: 0; padding:0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); min-height: 100vh; }
+
+/* 顶栏 */
+.topbar { display: flex; align-items: center; justify-content: space-between;
+           padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 8px; }
+.topbar h1 { font-size: 16px; font-weight: 600; white-space: nowrap; }
+.topbar .meta { font-size: 12px; color: var(--text2); display: flex; gap: 16px; flex-wrap: wrap; }
+.topbar .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.topbar button { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+                  padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 12px; }
+.topbar button:hover { border-color: var(--blue); }
+
+/* 状态卡片 */
+.status-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 16px 24px; }
+.status-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+               padding: 16px; position: relative; overflow: hidden; }
+.status-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text2); margin-bottom: 6px; }
+.status-card .value { font-size: 28px; font-weight: 700; font-family: var(--mono); }
+.status-card .sub { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.status-card::before { content: ''; position: absolute; left: 0; top:0; bottom:0; width: 3px; }
+.status-card.up::before { background: var(--green); }
+.status-card.down::before { background: var(--red); }
+.status-card.degraded::before { background: var(--yellow); }
+.status-card.unknown::before { background: var(--text2); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.badge.up { background: var(--green-bg); color: var(--green); }
+.badge.down { background: var(--red-bg); color: var(--red); }
+.badge.degraded { background: var(--yellow-bg); color: var(--yellow); }
+
+/* 图表区 */
+.charts-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; padding: 0 24px 16px; }
+.chart-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.chart-box h3 { font-size: 13px; color: var(--text2); margin-bottom: 12px; }
+.chart-canvas { width: 100%; height: 180px; position: relative; }
+.chart-canvas canvas { width: 100%; height: 100%; }
+
+/* 事件/日志区 */
+.bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 24px 24px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         display: flex; flex-direction: column; max-height: 450px; }
+.panel-header { display: flex; align-items: center; justify-content: space-between;
+                padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 8px; }
+.panel-header h3 { font-size: 13px; color: var(--text2); }
+.panel-header .filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.panel-header .filters button { background: transparent; border: 1px solid var(--border); color: var(--text2);
+                             padding: 3px 10px; border-radius: 12px; cursor: pointer; font-size: 11px; }
+.panel-header .filters button.active { border-color: var(--blue); color: var(--blue); }
+.panel-body { flex: 1; overflow-y: auto; padding: 8px 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.7; }
+.panel-body::-webkit-scrollbar { width: 6px; }
+.panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.event-entry { padding: 4px 16px; display: flex; gap: 8px; align-items: flex-start; }
+.event-entry:hover { background: var(--surface2); }
+.event-entry .ev-icon { width: 20px; text-align: center; flex-shrink: 0; font-size: 13px; }
+.event-entry .ev-ts { color: var(--text2); white-space: nowrap; flex-shrink: 0; font-size: 11px; }
+.event-entry .ev-msg { word-break: break-all; }
+.ev-disconnect .ev-icon { color: var(--red); }
+.ev-v4_down .ev-icon { color: var(--red); }
+.ev-recover .ev-icon { color: var(--green); }
+.ev-heartbeat .ev-icon { color: var(--text2); }
+
+.log-entry { padding: 2px 16px; display: flex; gap: 8px; }
+.log-entry:hover { background: var(--surface2); }
+.log-entry .ts { color: var(--text2); white-space: nowrap; flex-shrink: 0; }
+.log-entry .level { width: 50px; flex-shrink: 0; font-weight: 600; }
+.log-entry .level.INFO { color: var(--blue); }
+.log-entry .level.WARN { color: var(--yellow); }
+.log-entry .level.ERROR { color: var(--red); }
+.log-entry .msg { word-break: break-all; }
+
+.empty-msg { padding: 24px; text-align: center; color: var(--text2); font-style: italic; }
+.pulse { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-right: 6px; }
+.live-dot.off { background: var(--red); }
+
+/* 服务状态网格 */
+.targets-section { padding: 0 24px 16px; }
+.targets-section h3 { font-size: 13px; color: var(--text2); margin-bottom: 10px; }
+.targets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.target-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+               padding: 12px 14px; position: relative; overflow: hidden; transition: border-color .2s; }
+.target-card::before { content: ''; position: absolute; left:0; top:0; bottom:0; width: 3px; }
+.target-card.ok::before { background: var(--green); }
+.target-card.fail::before { background: var(--red); }
+.target-card.wait::before { background: var(--text2); }
+.target-card .t-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.target-card .t-ip { font-size: 11px; color: var(--text2); font-family: var(--mono); }
+.target-card .t-rtt { font-size: 18px; font-weight: 700; font-family: var(--mono); margin-top: 4px; }
+.target-card.ok .t-rtt { color: var(--green); }
+.target-card.fail .t-rtt { color: var(--red); }
+
+/* 链路质量仪表 */
+.quality-section { padding: 0 24px 16px; }
+.quality-section h3 { font-size: 13px; color: var(--text2); margin-bottom: 10px; }
+.quality-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.quality-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; text-align: center; }
+.quality-score { font-size: 48px; font-weight: 800; font-family: var(--mono); }
+.quality-label { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.quality-score.good { color: var(--green); }
+.quality-score.warn { color: var(--yellow); }
+.quality-score.bad { color: var(--red); }
+
+/* 系统资源条 */
+.resource-section { padding: 0 24px 16px; }
+.resource-section h3 { font-size: 13px; color: var(--text2); margin-bottom: 10px; }
+.resource-bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.resource-bar-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; }
+.resource-bar-item .rb-label { font-size: 11px; color: var(--text2); margin-bottom: 6px; display: flex; justify-content: space-between; }
+.resource-bar-item .rb-track { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.resource-bar-item .rb-fill { height: 100%; border-radius: 4px; transition: width .5s; }
+.rb-fill.low { background: var(--green); }
+.rb-fill.mid { background: var(--yellow); }
+.rb-fill.high { background: var(--red); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+    <h1><span class="live-dot" id="liveDot"></span>🌐 网络监控仪表盘 <span style="font-size:11px;color:var(--text2);font-weight:400">v2</span></h1>
+    <div class="meta">
+        <span>192.168.31.251 (ens18)</span>
+        <span id="uptimeInfo">-</span>
+        <span id="lineCount">-</span>
+        <span id="qualityDisplay">质量: --</span>
+    </div>
+    <div class="actions">
+        <button onclick="location.href='/webhook.html'">⚡ 告警配置</button>
+        <button onclick="location.href='/ftp.html'">📁 FTP 归档配置</button>
+        <button onclick="location.href='/ikuai.html'">📡 爱快路由器</button>
+        <button onclick="controlAction('restart')">🔄 重启监控</button>
+        <button onclick="clearLogs()">🗑️ 清空面板</button>
+    </div>
+</div>
+
+<!-- 状态卡片 -->
+<div class="status-row">
+    <div class="status-card unknown" id="gwCard">
+        <div class="label">网关 (IPv4)</div>
+        <div class="value" id="gwStatus">--</div>
+        <div class="sub" id="gwRtt">RTT: --</div>
+    </div>
+    <div class="status-card unknown" id="v4Card">
+        <div class="label">外网 IPv4</div>
+        <div class="value" id="v4Status">--</div>
+        <div class="sub" id="v4Rtt">RTT: --</div>
+    </div>
+    <div class="status-card unknown" id="v6Card">
+        <div class="label">外网 IPv6</div>
+        <div class="value" id="v6Status">--</div>
+        <div class="sub" id="v6Rtt">RTT: --</div>
+    </div>
+    <div class="status-card" id="discCard">
+        <div class="label">断网事件</div>
+        <div class="value" id="discCount">0</div>
+        <div class="sub" id="lastDisconnect">暂无断网记录</div>
+    </div>
+    <div class="status-card" id="pingCard">
+        <div class="label">Ping 统计</div>
+        <div class="value" id="pingStats">--</div>
+        <div class="sub" id="pingDetail">等待数据...</div>
+    </div>
+    <div class="status-card" id="bwCard">
+        <div class="label">带宽 (实时)</div>
+        <div class="value" id="bwValue">--</div>
+        <div class="sub" id="bwDetail">RX: -- TX: --</div>
+    </div>
+    <div class="status-card" id="tcpCard">
+        <div class="label">TCP 重传率</div>
+        <div class="value" id="tcpRetrans">--</div>
+        <div class="sub" id="tcpDetail">等待数据...</div>
+    </div>
+</div>
+
+<!-- 链路质量 -->
+<div class="quality-section">
+    <h3>📊 链路质量评分</h3>
+    <div class="quality-grid">
+        <div class="quality-card">
+            <div class="quality-score" id="qualityScore">--</div>
+            <div class="quality-label">综合质量 (0-100)</div>
+        </div>
+        <div class="quality-card">
+            <div style="font-size:20px;color:var(--text2);margin-top:8px">
+                RTT: <span id="qualityRtt" style="color:var(--blue)">--</span> ms<br>
+                丢包: <span id="qualityLoss" style="color:var(--yellow)">--</span>%<br>
+                抖动: <span id="qualityJitter" style="color:var(--green)">--</span> ms
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 系统资源 -->
+<div class="resource-section">
+    <h3>🖥️ 系统资源</h3>
+    <div class="resource-bars" id="resourceBars">
+        <div class="resource-bar-item">
+            <div class="rb-label"><span>CPU</span><span id="cpuPct">--%</span></div>
+            <div class="rb-track"><div class="rb-fill low" id="cpuBar" style="width:0%"></div></div>
+        </div>
+        <div class="resource-bar-item">
+            <div class="rb-label"><span>内存</span><span id="memPct">--%</span></div>
+            <div class="rb-track"><div class="rb-fill low" id="memBar" style="width:0%"></div></div>
+        </div>
+        <div class="resource-bar-item">
+            <div class="rb-label"><span>磁盘</span><span id="diskPct">--%</span></div>
+            <div class="rb-track"><div class="rb-fill low" id="diskBar" style="width:0%"></div></div>
+        </div>
+        <div class="resource-bar-item">
+            <div class="rb-label"><span>负载 (1min)</span><span id="loadPct">--</span></div>
+            <div class="rb-track"><div class="rb-fill low" id="loadBar" style="width:0%"></div></div>
+        </div>
+    </div>
+</div>
+
+<!-- 逐服务诊断 -->
+<div class="targets-section">
+    <h3>🎯 逐服务连通性</h3>
+    <div class="targets-grid" id="targetsGrid">
+        <div class="target-card wait"><div class="t-name">等待诊断数据...</div></div>
+    </div>
+</div>
+
+<!-- 图表区 -->
+<div class="charts-row">
+    <div class="chart-box">
+        <h3>📈 成功率趋势 (%)</h3>
+        <div class="chart-canvas"><canvas id="rateChart"></canvas></div>
+    </div>
+    <div class="chart-box">
+        <h3>📉 延迟趋势 (RTT ms)</h3>
+        <div class="chart-canvas"><canvas id="rttChart"></canvas></div>
+    </div>
+    <div class="chart-box">
+        <h3>📶 带宽趋势 (kbps)</h3>
+        <div class="chart-canvas"><canvas id="bwChart"></canvas></div>
+    </div>
+    <div class="chart-box">
+        <h3>🔄 TCP 重传率 (%)</h3>
+        <div class="chart-canvas"><canvas id="tcpChart"></canvas></div>
+    </div>
+</div>
+
+<!-- 事件和日志 -->
+<div class="bottom-row">
+    <div class="panel">
+        <div class="panel-header">
+            <h3>⚡ 事件流</h3>
+            <div class="filters">
+                <button class="active" data-filter="all" onclick="filterEvents('all',this)">全部</button>
+                <button data-filter="disconnect" onclick="filterEvents('disconnect',this)">断网/恢复</button>
+                <button data-filter="v4_down_v6_alive" onclick="filterEvents('v4_down_v6_alive',this)">V4断V6活</button>
+                <button data-filter="recover" onclick="filterEvents('recover',this)">恢复</button>
+            </div>
+        </div>
+        <div class="panel-body" id="eventPanel"><div class="empty-msg">等待事件...</div></div>
+    </div>
+    <div class="panel">
+        <div class="panel-header">
+            <h3>📋 实时日志</h3>
+            <div class="filters">
+                <button class="active" data-filter="all" onclick="filterLogs('all',this)">全部</button>
+                <button data-filter="ERROR" onclick="filterLogs('ERROR',this)">ERROR</button>
+                <button data-filter="WARN" onclick="filterLogs('WARN',this)">WARN</button>
+                <button data-filter="EVENT" onclick="filterLogs('EVENT',this)">EVENT</button>
+            </div>
+        </div>
+        <div class="panel-body" id="logPanel"><div class="empty-msg">等待日志...</div></div>
+    </div>
+</div>
+
+<script>
+// ─── 状态 ───
+let eventFilter = 'all', logFilter = 'all';
+let events = [], logs = [];
+let targets = {};
+const MAX_DISPLAY = 300;
+
+// ─── 图表 (纯 Canvas) ───
+class MiniChart {
+    constructor(canvasId, opts) {
+        this.canvas = document.getElementById(canvasId);
+        this.ctx = this.canvas.getContext('2d');
+        this.opts = Object.assign({ colors: ['#3fb950','#58a6ff','#f85149'], labels: [], maxPoints: 50, yMin: 0, yMax: 100, unit: '' }, opts);
+        this.data = [];
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+    }
+    resize() {
+        const r = this.canvas.parentElement.getBoundingClientRect();
+        this.canvas.width = r.width * devicePixelRatio;
+        this.canvas.height = r.height * devicePixelRatio;
+        this.ctx.scale(devicePixelRatio, devicePixelRatio);
+        this.w = r.width; this.h = r.height;
+        this.draw();
+    }
+    setData(data) { this.data = data.slice(-this.opts.maxPoints); this.draw(); }
+    draw() {
+        const { ctx, w, h, data, opts } = this;
+        ctx.clearRect(0, 0, w, h);
+        if (!data.length) {
+            ctx.fillStyle = '#8b949e'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('暂无数据', w/2, h/2); return;
+        }
+        const pad = { t: 10, r: 10, b: 25, l: 40 };
+        const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+        const { yMin, yMax, colors, labels, unit } = opts;
+
+        // 网格
+        ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+        for (let i = 0; i <= 4; i++) {
+            const y = pad.t + ch * i / 4;
+            ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+            ctx.fillStyle = '#8b949e'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+            ctx.fillText(Math.round(yMax - (yMax - yMin) * i / 4) + unit, pad.l - 4, y + 3);
+        }
+
+        // 数据系列
+        const keys = Object.keys(data[0]).filter(k => k !== 'ts');
+        keys.forEach((key, ki) => {
+            const vals = data.map(d => d[key]).filter(v => v != null);
+            if (!vals.length) return;
+            ctx.strokeStyle = colors[ki % colors.length];
+            ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+            ctx.beginPath();
+            data.forEach((d, i) => {
+                const v = d[key];
+                if (v == null) return;
+                const x = pad.l + (i / Math.max(data.length - 1, 1)) * cw;
+                const y = pad.t + ch - ((v - yMin) / (yMax - yMin)) * ch;
+                i === 0 || data[i-1][key] == null ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            // 图例
+            const lx = pad.l + ki * 120;
+            ctx.fillStyle = colors[ki % colors.length];
+            ctx.fillRect(lx, h - 12, 12, 3);
+            ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+            ctx.fillText(labels[ki] || key, lx + 16, h - 8);
+        });
+    }
+}
+const rateChart = new MiniChart('rateChart', { labels: ['网关', 'IPv4', 'IPv6'], colors: ['#3fb950','#f85149','#58a6ff'], unit: '%' });
+const rttChart = new MiniChart('rttChart', { labels: ['网关 RTT', 'IPv4 RTT', 'IPv6 RTT'], colors: ['#3fb950','#f85149','#58a6ff'], yMin: 0, yMax: 250, unit: 'ms' });
+const bwChart = new MiniChart('bwChart', { labels: ['RX', 'TX'], colors: ['#58a6ff','#3fb950'], yMin: 0, yMax: 5000, unit: 'kbps' });
+const tcpChart = new MiniChart('tcpChart', { labels: ['重传率'], colors: ['#f85149'], yMin: 0, yMax: 100, unit: '%' });
+
+// ─── 事件图标 ───
+const evIcons = {
+    disconnect: '⚠', v4_down: '⊘', v4_down_v6_alive: '⚡', v6_down: '⊘',
+    recover: '✓', recover_gw: '✓', recover_v4: '✓', recover_v6: '✓',
+    snapshot: '📸', link_down: '⊘', link_up: '⊕',
+    ip_change: '⟳', v4_ip_change: '⟳', v6_ip_change: '⟳',
+    route_change: '⇄', route_v4_change: '⇄', route_v6_change: '⇄',
+    no_v4_route: '⊘', conntrack_high: '🔥',
+    trace_v4_change: '🔀', trace_v6_change: '🔀', trace_base: '📍',
+    mass_leave: '⚠', arp_change: '◉',
+    dns_fail: '✗', dns_v4_fail: '✗', dns_v6_fail: '✗',
+    carrier_change: '⚡', heartbeat: '·', stats: '·', failure: '✗',
+    bandwidth: '📶', tcp_retrans: '🔄', system: '🖥️', http_latency: '🌐',
+    inet_down: '🌐'
+};
+
+function renderEvent(ev) {
+    const etype = ev.event_type || 'info';
+    const icon = evIcons[etype] || '·';
+    const shortTs = ev.ts ? ev.ts.slice(11, 19) : '';
+    return `<div class="event-entry ev-${etype}">
+        <span class="ev-icon">${icon}</span>
+        <span class="ev-ts">${shortTs}</span>
+        <span class="ev-msg">${escHtml(ev.msg)}</span>
+    </div>`;
+}
+function renderLog(l) {
+    const shortTs = l.ts ? l.ts.slice(11, 23) : '';
+    return `<div class="log-entry">
+        <span class="ts">${shortTs}</span>
+        <span class="level ${l.level}">${l.level}</span>
+        <span class="msg">${escHtml(l.msg)}</span>
+    </div>`;
+}
+function escHtml(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''; }
+
+function refreshEvents() {
+    const panel = document.getElementById('eventPanel');
+    let filtered = events;
+    if (eventFilter !== 'all') {
+        if (eventFilter === 'disconnect') {
+            filtered = events.filter(e => ['disconnect','inet_down','v4_down','v4_down_v6_alive','v6_down','link_down','mass_leave','ip_change','v4_ip_change','carrier_change','no_v4_route','conntrack_high','snapshot'].includes(e.event_type));
+        } else {
+            filtered = events.filter(e => e.event_type === eventFilter);
+        }
+    }
+    filtered = filtered.slice(-MAX_DISPLAY);
+    panel.innerHTML = filtered.length ? filtered.map(renderEvent).join('') : '<div class="empty-msg">无事件</div>';
+    panel.scrollTop = panel.scrollHeight;
+}
+function refreshLogs() {
+    const panel = document.getElementById('logPanel');
+    let filtered = logs;
+    if (logFilter !== 'all') filtered = logs.filter(l => l.level === logFilter);
+    filtered = filtered.slice(-MAX_DISPLAY);
+    panel.innerHTML = filtered.length ? filtered.map(renderLog).join('') : '<div class="empty-msg">无日志</div>';
+    panel.scrollTop = panel.scrollHeight;
+}
+function filterEvents(f, btn) {
+    eventFilter = f;
+    btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    refreshEvents();
+}
+function filterLogs(f, btn) {
+    logFilter = f;
+    btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    refreshLogs();
+}
+function clearLogs() { events = []; logs = []; refreshEvents(); refreshLogs(); }
+
+const TARGET_ICONS = {
+    '王者荣耀': '🎮', '百度': '🔍', '京东': '🛒',
+    '腾讯': '💬', '阿里': '🛍️', '小米': '📱', '华为': '📡',
+    '公共DNS': '🌐', '本地DNS': '🏠', '本地DNS解析': '📡'
+};
+
+function renderTargets() {
+    const grid = document.getElementById('targetsGrid');
+    const keys = Object.keys(targets);
+    if (!keys.length) { grid.innerHTML = '<div class="target-card wait"><div class="t-name">等待诊断数据...</div></div>'; return; }
+    const TARGET_ORDER = ['王者荣耀', '腾讯', '百度', '京东', '阿里', '小米', '华为', '公共DNS', '本地DNS', '本地DNS解析'];
+    keys.sort((a, b) => {
+        const ai = TARGET_ORDER.indexOf(a), bi = TARGET_ORDER.indexOf(b);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+    grid.innerHTML = keys.map(k => {
+        const t = targets[k];
+        const icon = TARGET_ICONS[k] || '🖥️';
+        const isFail = t.status !== 'ok';
+        const cls = isFail ? 'fail' : 'ok';
+        const rttText = !isFail ? t.rtt : (t.status === 'dns_fail' ? 'DNS解析失败' : 'FAIL');
+        const tsShort = t.ts ? t.ts.slice(11, 19) : '';
+        let rateHtml = '';
+        if (t.rate != null) {
+            const rateColor = t.rate >= 90 ? 'var(--green)' : t.rate >= 60 ? 'var(--yellow)' : 'var(--red)';
+            rateHtml = `<div style="font-size:20px;font-weight:700;font-family:var(--mono);color:${rateColor};margin-top:2px">${t.rate}%<span style="font-size:10px;font-weight:400;color:var(--text2)"> / ${t.total}次</span></div>`;
+        }
+        return `<div class="target-card ${cls}">
+            <div class="t-name">${icon} ${escHtml(k)}</div>
+            <div class="t-ip">${t.ip}</div>
+            <div class="t-rtt">${rttText}</div>
+            ${rateHtml}
+            <div style="font-size:10px;color:var(--text2);margin-top:4px">${tsShort}</div>
+        </div>`;
+    }).join('');
+}
+
+function updateStatus(data) {
+    // 网关
+    const gwS = data.gw_status || 'unknown';
+    document.getElementById('gwCard').className = 'status-card ' + gwS;
+    document.getElementById('gwStatus').innerHTML = `<span class="badge ${gwS}">${gwS.toUpperCase()}</span>`;
+    document.getElementById('gwRtt').textContent = 'RTT: ' + (data.gw_rtt && data.gw_rtt !== '?' ? data.gw_rtt : '--') + ' ms';
+    // IPv4
+    const v4S = data.v4_status || 'unknown';
+    document.getElementById('v4Card').className = 'status-card ' + v4S;
+    document.getElementById('v4Status').innerHTML = `<span class="badge ${v4S}">${v4S.toUpperCase()}</span>`;
+    const v4r = data.v4_rtt;
+    document.getElementById('v4Rtt').textContent = 'RTT: ' + (v4r && v4r !== 'ms' && v4r !== '?' ? v4r : '--') + ' ms';
+    // IPv6
+    const v6S = data.v6_status || 'unknown';
+    document.getElementById('v6Card').className = 'status-card ' + v6S;
+    document.getElementById('v6Status').innerHTML = `<span class="badge ${v6S}">${v6S.toUpperCase()}</span>`;
+    const v6r = data.v6_rtt;
+    document.getElementById('v6Rtt').textContent = 'RTT: ' + (v6r && v6r !== 'ms' && v6r !== '?' ? v6r : '--') + ' ms';
+    // 断网计数
+    document.getElementById('discCount').textContent = data.disconnect_events || 0;
+    // Ping 统计
+    if (data.total_pings > 0) {
+        const gwPct = ((data.gw_ok / data.total_pings) * 100).toFixed(1);
+        const v4Pct = (((data.v4_ok || 0) / data.total_pings) * 100).toFixed(1);
+        const v6Pct = (((data.v6_ok || 0) / data.total_pings) * 100).toFixed(1);
+        document.getElementById('pingStats').textContent = data.total_pings;
+        document.getElementById('pingDetail').textContent = `GW:${gwPct}% V4:${v4Pct}% V6:${v6Pct}%`;
+    }
+    // 链路质量
+    const qlty = data.link_quality;
+    const qEl = document.getElementById('qualityScore');
+    qEl.textContent = qlty || '--';
+    qEl.className = 'quality-score ' + (qlty >= 80 ? 'good' : qlty >= 50 ? 'warn' : 'bad');
+    document.getElementById('qualityDisplay').textContent = '质量: ' + (qlty || '--');
+    // 运行状态
+    const dot = document.getElementById('liveDot');
+    dot.className = data.monitor_running ? 'live-dot' : 'live-dot off';
+    document.getElementById('uptimeInfo').textContent = data.last_heartbeat ? '最后心跳: ' + data.last_heartbeat.slice(11,19) : '等待心跳...';
+    document.getElementById('lineCount').textContent = (data.log_lines_count || 0) + ' 行日志';
+}
+
+function updateStats(data) {
+    // 带宽
+    const rx = data.bandwidth_rx_kbps || 0;
+    const tx = data.bandwidth_tx_kbps || 0;
+    document.getElementById('bwValue').textContent = rx + ' / ' + tx;
+    document.getElementById('bwDetail').textContent = 'RX: ' + rx + 'kbps  TX: ' + tx + 'kbps';
+    // TCP 重传
+    const retrans = data.tcp_retrans_rate || 0;
+    document.getElementById('tcpRetrans').textContent = retrans + '%';
+    document.getElementById('tcpDetail').textContent = retrans > 10 ? '⚠️ 偏高' : '正常';
+    document.getElementById('tcpCard').className = 'status-card ' + (retrans > 10 ? 'degraded' : 'up');
+    // 图表
+    if (data.success_rate_history) rateChart.setData(data.success_rate_history);
+    if (data.rtt_history) rttChart.setData(data.rtt_history);
+    // 带宽图表 (需要从历史日志提取，这里用当前值模拟)
+    // 系统资源
+    if (data.system_stats && data.system_stats.length) {
+        const last = data.system_stats[data.system_stats.length - 1];
+        updateResourceBars(last);
+    }
+}
+
+function updateResourceBars(s) {
+    if (!s) return;
+    setBar('cpuBar', 'cpuPct', s.cpu_pct);
+    setBar('memBar', 'memPct', s.mem_pct);
+    setBar('diskBar', 'diskPct', s.disk_pct);
+    // 负载: 假设 4 核，> 3 为 high
+    const loadPct = Math.min(100, (s.load1 || 0) * 25);
+    setBar('loadBar', 'loadPct', loadPct, (s.load1 || 0).toFixed(2));
+}
+function setBar(barId, pctId, pct, textOverride) {
+    const bar = document.getElementById(barId);
+    const pctEl = document.getElementById(pctId);
+    const val = Math.min(100, Math.round(pct));
+    bar.style.width = val + '%';
+    bar.className = 'rb-fill ' + (val < 50 ? 'low' : val < 80 ? 'mid' : 'high');
+    pctEl.textContent = textOverride != null ? textOverride : val + '%';
+}
+
+function controlAction(action) {
+    if (action === 'restart' && !confirm('确定重启监控？')) return;
+    fetch(`/api/control?action=${action}`).then(r => r.json()).then(d => {
+        if (d.success) setTimeout(loadStatus, 2000);
+    });
+}
+
+// ─── SSE ───
+function connectSSE() {
+    const es = new EventSource('/api/stream');
+    es.onmessage = function(e) {
+        try {
+            const d = JSON.parse(e.data);
+            if (d.type === 'init') { updateStatus(d); return; }
+            logs.push(d);
+            if (logs.length > MAX_DISPLAY * 2) logs = logs.slice(-MAX_DISPLAY);
+            if (logFilter === 'all' || logFilter === d.level) refreshLogs();
+            if (d.event_type && d.event_type !== 'heartbeat' && d.event_type !== 'stats') {
+                events.push(d);
+                if (events.length > MAX_DISPLAY * 2) events = events.slice(-MAX_DISPLAY);
+                refreshEvents();
+            }
+            if (['disconnect','inet_down','v4_down','v4_down_v6_alive','v6_down','link_down',
+                 'recover','recover_gw','recover_v4','recover_v6','snapshot'].includes(d.event_type)) {
+                loadStatus();
+            }
+        } catch(e) {}
+    };
+    es.onerror = function() {
+        setTimeout(connectSSE, 3000);
+        es.close();
+    };
+}
+
+// ─── 数据加载 ───
+function loadStatus()  { fetch('/api/status').then(r => r.json()).then(updateStatus).catch(()=>{}); }
+function loadStats()   { fetch('/api/stats').then(r => r.json()).then(updateStats).catch(()=>{}); }
+function loadEvents()  { fetch('/api/events?limit=200').then(r => r.json()).then(d => { events = d; refreshEvents(); }).catch(()=>{}); }
+function loadLogs()    { fetch('/api/logs?limit=200').then(r => r.json()).then(d => { logs = d; refreshLogs(); }).catch(()=>{}); }
+function loadTargets() { fetch('/api/targets').then(r => r.json()).then(d => { targets = d; renderTargets(); }).catch(()=>{}); }
+
+// ─── 启动 ───
+loadStatus(); loadStats(); loadEvents(); loadLogs(); loadTargets();
+connectSSE();
+setInterval(loadStatus, 10000);
+setInterval(loadStats, 15000);
+setInterval(loadTargets, 15000);
+</script>
+</body>
+</html>

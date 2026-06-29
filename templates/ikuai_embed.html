@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>爱快路由器监控</title>
+<style>
+:root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
+    --border: #30363d; --text: #e6edf3; --text2: #8b949e;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --orange: #f0883e;
+    --green-bg: rgba(63,185,80,.12); --red-bg: rgba(248,81,73,.12);
+    --yellow-bg: rgba(210,153,34,.12);
+    --radius: 8px; --mono: 'JetBrains Mono', monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: var(--bg); color: var(--text); min-height: 100vh; }
+.topbar { display: flex; align-items: center; justify-content: space-between;
+           padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 8px; }
+.topbar h1 { font-size: 16px; font-weight: 600; }
+.topbar .actions { display: flex; gap: 8px; }
+.topbar button { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+                  padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 12px; }
+.topbar button:hover { border-color: var(--blue); }
+.container { padding: 20px 24px; max-width: 1200px; margin: 0 auto; }
+
+/* 状态行 */
+.status-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         padding: 16px; position: relative; overflow: hidden; }
+.card .label { font-size: 11px; text-transform: uppercase; color: var(--text2); letter-spacing: .5px; margin-bottom: 6px; }
+.card .value { font-size: 26px; font-weight: 700; font-family: var(--mono); }
+.card .sub { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.card.online { border-left: 3px solid var(--green); }
+.card.offline { border-left: 3px solid var(--red); }
+.card.warning { border-left: 3px solid var(--yellow); }
+.green-text { color: var(--green); }
+.red-text { color: var(--red); }
+.yellow-text { color: var(--yellow); }
+
+/* 表格 */
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 20px; }
+.table-title { padding: 10px 16px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border);
+              display: flex; align-items: center; gap: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { background: var(--surface2); padding: 8px 12px; text-align: left; font-size: 11px; color: var(--text2);
+      text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }
+td { padding: 8px 12px; border-top: 1px solid var(--border); white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+tr:hover td { background: rgba(88,166,255,.06); }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.badge-up { background: var(--green-bg); color: var(--green); }
+.badge-down { background: var(--red-bg); color: var(--red); }
+
+.err-msg { color: var(--red); padding: 40px; text-align: center; font-size: 14px; }
+.loading { color: var(--text2); padding: 40px; text-align: center; }
+
+.refresh-info { float: right; font-size: 11px; color: var(--text2); font-weight: normal; }
+</style>
+</head>
+<body>
+<div class="topbar">
+    <h1>📡 爱快路由器 <span id="router-status" class="badge badge-down">离线</span></h1>
+    <div class="actions">
+        <button onclick="loadAll()">🔄 刷新数据</button>
+        <a href="/" style="text-decoration:none"><button>← 返回仪表盘</button></a>
+    </div>
+</div>
+<div class="container">
+    <div id="loading-msg" class="loading">正在连接路由器...</div>
+
+    <!-- 系统概览 -->
+    <div class="status-row" id="overview-row" style="display:none"></div>
+
+    <!-- 网络接口 -->
+    <div class="table-wrap" id="ifaces-section" style="display:none">
+        <div class="table-title">🌐 网络接口 <span class="refresh-info" id="iface-time"></span></div>
+        <div style="overflow-x:auto"><table><thead><tr>
+            <th>接口名</th><th>IP地址</th><th>状态</th><th>类型</th>
+            <th>上行速率</th><th>下行速率</th><th>上行流量</th><th>下行流量</th>
+        </tr></thead><tbody id="ifaces-tbody"></tbody></table></div>
+    </div>
+
+    <!-- 在线客户端 -->
+    <div class="table-wrap" id="clients-section" style="display:none">
+        <div class="table-title">📱 在线客户端 <span class="refresh-info" id="client-time"></span></div>
+        <div style="overflow-x:auto"><table><thead><tr>
+            <th>IP地址</th><th>MAC地址</th><th>连接方式</th>
+            <th>上传</th><th>下载</th><th>在线时长</th><th>累计上传</th><th>累计下载</th>
+        </tr></thead><tbody id="clients-tbody"></tbody></table></div>
+    </div>
+
+    <!-- API调试 -->
+    <div class="table-wrap" id="debug-section" style="display:none">
+        <div class="table-title">🔧 API调试信息</div>
+        <div id="debug-content" style="padding:12px;font-size:12px;font-family:var(--mono);color:var(--text2)"></div>
+    </div>
+</div>
+
+<script>
+let refreshTimer = null;
+
+function fmtBytes(b) {
+    if (!b || b == '0') return '0 B';
+    b = Number(b);
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0; while (b >= 1024 && i < units.length-1) { b /= 1024; i++; }
+    return b.toFixed(i==0?0:1) + ' ' + units[i];
+}
+function fmtSpeed(s) { if (!s || s=='0') return '0 B/s'; s=Number(s); return fmtBytes(s)+'/s'; }
+function fmtSecs(t) {
+    t = Number(t);
+    if (t < 60) return t+'秒';
+    if (t < 3600) return Math.floor(t/60)+'分'+(t%60)+'秒';
+    const h=Math.floor(t/3600), m=Math.floor((t%3600)/60);
+    return h+'时'+m+'分';
+}
+
+async function apiFetch(url, opts={}) {
+    try {
+        const r = await fetch(url, opts);
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        const text = await r.text();
+        // 防止后端返回 HTML 错误页面
+        if (text.trim().startsWith('<') || text.trim().startsWith('<!')) {
+            throw new Error('服务器返回非JSON数据（路由器可能离线），请检查Python日志');
+        }
+        return JSON.parse(text);
+    } catch(e) { return { error: e.message }; }
+}
+
+function renderOverview(data) {
+    const row = document.getElementById('overview-row');
+    const items = [
+        { label: '在线用户', value: data.online||'?', sub: '当前已连接设备' },
+        { label: '上行速率', value: data.up_speed?fmtSpeed(data.up_speed):'N/A', sub: '实时上传速度' },
+        { label: '下行速率', value: data.down_speed?fmtSpeed(data.down_speed):'N/A', sub: '实时下载速度' },
+        { label: '累计上行', value: data.total_up?fmtBytes(data.total_up):'N/A', sub: '' },
+        { label: '累计下行', value: data.total_down?fmtBytes(data.total_down):'N/A', sub: '' },
+        { label: '运行时长', value: data.sysuptime?fmtSecs(data.sysuptime):'N/A', sub: '' },
+        { label: '固件版本', value: data.router_ver||data.firmware||'N/A', sub: '' },
+        { label: '公网IP', value: data.reflexive_address||'N/A', sub: '' },
+    ];
+    row.innerHTML = items.map(c => `<div class="card online"><div class="label">${c.label}</div><div class="value">${c.value}</div>${c.sub?`<div class="sub">${c.sub}</div>`:''}</div>`).join('');
+    row.style.display='grid';
+}
+
+function renderIfaces(data) {
+    const tbody = document.getElementById('ifaces-tbody');
+    const section = document.getElementById('ifaces-section');
+    let rows='';
+    // 兼容新旧两种 API 返回格式
+    const list=(data.iface_stream)||(data.results&&data.results.iface_stream)||(data.Data&&data.Data.data)||[];
+    if(!Array.isArray(list)) list=[];
+    if(list.length===0){rows='<tr><td colspan="8" style="color:var(--text2)">暂无接口数据</td></tr>';}
+    else{list.forEach(i=>{
+        // monitor_iface iface_stream 没有 up/status 字段，只要有数据就是在线
+        // 仅当明确有 down/off/0 等值时才显示离线
+        const upVal=String(i.up||i.status||'').toLowerCase();
+        const explicitlyDown=(upVal==='no'||upVal==='0'||upVal==='false'||upVal==='down'||upVal==='off');
+        const isUp=!explicitlyDown;  // 默认在线，除非明确是 down
+        const statusText=isUp?'在线':(i.up||i.status||'断开');
+        rows+=`<tr><td>${i.name||i.interface||i.comment||i.ip||''}</td><td>${i.ip||i.ip_addr||''}</td><td><span class="badge ${isUp?'badge-up':'badge-down'}">${statusText}</span></td><td>${i.comment||i.type||i.desc||''}</td><td>${fmtSpeed(i.tx_bytes_rate||i.upload||i.up_speed||0)}</td><td>${fmtSpeed(i.rx_bytes_rate||i.download||i.down_speed||0)}</td><td>${fmtBytes(i.tx_bytes||i.total_up||0)}</td><td>${fmtBytes(i.rx_bytes||i.total_down||0)}</td></tr>`;
+    });}
+    tbody.innerHTML=rows;section.style.display='block';
+    document.getElementById('iface-time').textContent=new Date().toLocaleTimeString();
+}
+
+function renderClients(data) {
+    const tbody=document.getElementById('clients-tbody');
+    const section=document.getElementById('clients-section');
+    let rows='';
+    const list=(data.Data&&data.Data.data)||(data.Data&&Array.isArray(data.Data)?data.Data:[]);
+    if(!Array.isArray(list))list=[];
+    if(list.length===0){rows='<tr><td colspan="8" style="color:var(--text2)">暂无客户端数据</td></tr>';}
+    else{list.forEach(c=>{
+        rows+=`<tr><td>${c.ip||''}</td><td>${c.mac||''}</td><td>${c.ppptype||c.type||'-'}</td><td>${fmtSpeed(c.up||0)}</td><td>${fmtSpeed(c.down||0)}</td><td>${fmtSecs(c.connect_time||c.connect||0)}</td><td>${fmtBytes(c.total_up||0)}</td><td>${fmtBytes(c.total_down||0)}</td></tr>`;
+    });}
+    tbody.innerHTML=rows;section.style.display='block';
+    document.getElementById('client-time').textContent=new Date().toLocaleTimeString();
+}
+
+async function loadAll() {
+    const loading=document.getElementById('loading-msg');
+    const st=document.getElementById('router-status');
+    st.className='badge badge-down';st.textContent='连接中...';
+    loading.style.display='block';
+
+    // 获取概览
+    const ov=await apiFetch('/api/ikuai');
+    loading.style.display='none';
+
+    if(ov.error&&!ov.online){
+        st.className='badge badge-down';st.textContent='离线';
+        document.getElementById('overview-row').innerHTML=`<div class="card offline" style="grid-column:1/-1"><div class="label">错误</div><div class="value red-text">无法连接爱快路由器</div><div class="sub">${ov.error}</div></div>`;
+        document.getElementById('overview-row').style.display='grid';
+        return;
+    }
+
+    st.className='badge badge-up';st.textContent='在线';
+
+    // ── 渲染概览卡片 ──
+    const wanData=(Array.isArray(ov.wan)?ov.wan:[]);
+    const wan=wanData[0]||{};
+    const ifaceTraffic=(ov.monitor_iface&&ov.monitor_iface.iface_stream)||[];
+    // 计算总速率
+    let totalUp=0,totalDown=0;
+    ifaceTraffic.forEach(i=>{totalUp+=Number(i.upload||0);totalDown+=Number(i.download||0);});
+    const dhcpLeases=(ov.dhcp_lease&&ov.dhcp_lease.data)||[];
+    const arpData=(ov.arp&&ov.arp.data)||(ov.arp&&ov.arp.arp)||[];
+
+    renderOverview({
+        online: wanData.filter(w=>w.pppoe_status==2||w.internet==2).length+' / '+wanData.length,
+        up_speed: totalUp, down_speed: totalDown,
+        total_up: wan.total_up_bytes||0, total_down: wan.total_down_bytes||0,
+        sysuptime: ov.sysuptime, router_ver: ov.router_ver,
+        reflexive_address: wan.pppoe_ip_addr||''
+    });
+
+    // ── 渲染接口流量表 ──
+    if(ifaceTraffic.length>0){
+        renderIfaces({iface_stream:ifaceTraffic});
+    }else if(ov.monitor_iface){
+        renderIfaces(ov.monitor_iface);
+    }
+
+    // ── 渲染 WAN 配置表 ──
+    const wanSection=document.getElementById('wan-section');
+    if(wanSection&&wanData.length>0){
+        const wtbody=document.getElementById('wan-tbody');
+        if(wtbody){
+            let wrows='';
+            wanData.forEach(w=>{
+                const isUp=w.pppoe_status==2||w.internet==2;
+                wrows+=`<tr><td>${w.name||'?'}</td><td>${w.pppoe_ip_addr||'-'}</td><td>${w.wan_proto||'-'}</td>
+                <td>${(w.dns||[]).join('<br>')||'-'}</td>
+                <td><span class="badge ${isUp?'badge-up':'badge-down'}">${isUp?'在线':'离线'}</span></td></tr>`;
+            });
+            wtbody.innerHTML=wrows;wanSection.style.display='block';
+        }
+    }
+}
+
+// 自动刷新：30秒一次
+loadAll();
+refreshTimer=setInterval(loadAll,30000);
+</script>
+</body>
+</html>

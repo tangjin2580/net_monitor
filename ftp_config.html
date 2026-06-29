@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FTP 配置 — 网络监控</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Cpath d='M16 40h32v8H16z' fill='none' stroke='%2358a6ff' stroke-width='2.5'/%3E%3Ccircle cx='24' cy='44' r='2' fill='%233fb950'/%3E%3Ccircle cx='40' cy='44' r='2' fill='%233fb950'/%3E%3Cpath d='M20 40V28a12 12 0 0124 0v12' fill='none' stroke='%2358a6ff' stroke-width='2.5'/%3E%3C/svg%3E">
+<style>
+:root {
+    --bg: #0a0c15; --surface: rgba(22,27,42,.7); --surface2: rgba(30,36,56,.55);
+    --border: rgba(113,119,144,.2); --text: #e6edf3; --text2: #8b949e;
+    --green: #4ade80; --red: #f87171; --yellow: #facc15; --blue: #60a5fa;
+    --green-bg: rgba(63,185,80,.12); --red-bg: rgba(248,81,73,.12);
+    --yellow-bg: rgba(210,153,34,.12); --blue-bg: rgba(88,166,255,.12);
+    --radius: 12px; --mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.topbar { display:flex; align-items:center; justify-content:space-between;
+          padding:12px 24px; background:var(--surface); border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px; }
+.topbar h1 { font-size:16px; font-weight:600; display:flex; align-items:center; gap:8px; }
+.topbar .actions { display:flex; gap:8px; }
+.topbar a { color:var(--text2); text-decoration:none; font-size:12px; padding:6px 14px;
+            border:1px solid var(--border); border-radius:var(--radius); }
+.topbar a:hover { border-color:var(--blue); color:var(--text); }
+
+.container { max-width:720px; margin:0 auto; padding:32px 24px; }
+
+/* Form */
+.form-section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:24px; margin-bottom:20px; }
+.form-section h2 { font-size:14px; font-weight:600; margin-bottom:20px; display:flex; align-items:center; gap:8px; }
+.form-row { display:flex; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
+.form-field { flex:1; min-width:200px; }
+.form-field label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); margin-bottom:6px; }
+.form-field input { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px;
+                    color:var(--text); padding:8px 12px; font-size:13px; font-family:var(--mono); }
+.form-field input:focus { outline:none; border-color:var(--blue); }
+.form-field input:read-only { opacity:.6; cursor:not-allowed; }
+
+/* Toggle */
+.toggle-row { display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-top:1px solid var(--border); }
+.toggle-row:first-of-type { border-top:none; }
+.toggle-row .info { font-size:13px; }
+.toggle-row .info .desc { font-size:11px; color:var(--text2); margin-top:2px; }
+.toggle { position:relative; width:44px; height:24px; flex-shrink:0; }
+.toggle input { display:none; }
+.toggle .slider { position:absolute; inset:0; background:var(--surface2); border:1px solid var(--border); border-radius:12px; cursor:pointer; transition:.2s; }
+.toggle .slider::before { content:''; position:absolute; width:18px; height:18px; left:2px; top:2px; background:var(--text2); border-radius:50%; transition:.2s; }
+.toggle input:checked + .slider { background:var(--green-bg); border-color:var(--green); }
+.toggle input:checked + .slider::before { transform:translateX(20px); background:var(--green); }
+
+/* Buttons */
+.btn-row { display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }
+button { padding:8px 20px; border-radius:var(--radius); cursor:pointer; font-size:13px; border:1px solid var(--border);
+         background:var(--surface2); color:var(--text); transition:.15s; }
+button:hover { border-color:var(--blue); }
+button.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
+button.primary:hover { opacity:.85; }
+button.test { border-color:var(--yellow); color:var(--yellow); }
+button.test:hover { background:var(--yellow-bg); }
+button.upload { border-color:var(--green); color:var(--green); }
+button.upload:hover { background:var(--green-bg); }
+button:disabled { opacity:.4; cursor:wait; }
+
+/* Result */
+.result-box { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-top:16px; max-height:420px; overflow-y:auto; display:none; }
+.result-box.show { display:block; }
+.result-box h3 { font-size:13px; font-weight:600; margin-bottom:12px; display:flex; align-items:center; gap:6px; }
+.result-list { font-size:12px; font-family:var(--mono); }
+.result-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--border); }
+.result-item:first-child { border-top:none; }
+.result-item .icon { width:16px; text-align:center; font-weight:700; }
+.result-item .icon.ok { color:var(--green); }
+.result-item .icon.fail { color:var(--red); }
+.result-item .fname { flex:1; color:var(--text); word-break:break-all; }
+.result-item .msg { color:var(--text2); font-size:11px; }
+
+/* Toast */
+.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(60px); padding:10px 24px;
+         border-radius:var(--radius); font-size:13px; z-index:999; opacity:0; transition:.3s; pointer-events:none; }
+.toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
+.toast.ok { background:var(--green-bg); border:1px solid var(--green); color:var(--green); }
+.toast.err { background:var(--red-bg); border:1px solid var(--red); color:var(--red); }
+
+/* Status indicator */
+.status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+.status-dot.on { background:var(--green); }
+.status-dot.off { background:var(--text2); }
+
+.last-upload { font-size:11px; color:var(--text2); margin-top:12px; text-align:center; }
+  .topbar,.section,.card,.container .card,.status-card { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  body { font-family: "Poppins", sans-serif; -webkit-font-smoothing: antialiased; background: #0a0c15; background-image: radial-gradient(ellipse 100% 50% at 50% -30%, rgba(96,165,250,.12) 0%, transparent 50%), radial-gradient(ellipse 60% 30% at 90% 100%, rgba(74,222,128,.06) 0%, transparent 50%); background-attachment: fixed; color: var(--text); }
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: rgba(113,119,144,.3); border-radius: 10px; }
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .section, .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+    <h1>📁 FTP 配置</h1>
+    <div class="actions">
+        <a href="/dashboard.html">← 仪表盘</a>
+        <a href="/admin.html">🔧 管理</a>
+        <a href="/ikuai.html">📡 爱快</a>
+        <a href="/config.html">⚙️ 监控配置</a>
+        <a href="/webhook.html">🔔 钉钉</a>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- FTP 服务器配置 -->
+    <div class="form-section">
+        <h2>🌐 FTP 服务器 <span id="status-indicator" style="font-size:12px;font-weight:400;color:var(--text2)"><span class="status-dot off" id="status-dot"></span> <span id="status-text">未连接</span></span></h2>
+
+        <div class="form-row">
+            <div class="form-field">
+                <label>服务器地址</label>
+                <input type="text" id="host" placeholder="192.168.31.5" autocomplete="off">
+            </div>
+            <div class="form-field" style="max-width:100px;flex:0 0 100px">
+                <label>端口</label>
+                <input type="number" id="port" placeholder="21" min="1" max="65535">
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-field">
+                <label>用户名</label>
+                <input type="text" id="user" placeholder="FTP 用户名" autocomplete="off">
+            </div>
+            <div class="form-field">
+                <label>密码</label>
+                <input type="password" id="password" placeholder="留空则不修改">
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-field">
+                <label>远程目录</label>
+                <input type="text" id="remote_path" placeholder="/path/to/upload" autocomplete="off">
+            </div>
+        </div>
+
+        <!-- 开关 -->
+        <div class="toggle-row">
+            <div class="info">
+                启用 FTP 上传
+                <div class="desc">开启后，日志归档时自动上传到 FTP 服务器</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="enabled"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+            <div class="info">
+                轮转时自动上传
+                <div class="desc">日志轮转后触发 FTP 上传（每日定时）</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="upload_on_rotate"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+            <div class="info">
+                保留本地副本
+                <div class="desc">上传后不删除本地文件</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="keep_local"><span class="slider"></span></label>
+        </div>
+
+        <!-- 按钮 -->
+        <div class="btn-row">
+            <button class="primary" id="btn-save" onclick="saveConfig()">💾 保存配置</button>
+            <button class="test" id="btn-test" onclick="testConn()">🔌 测试连接</button>
+            <button class="upload" id="btn-upload" onclick="doUpload()">⬆ 立即上传</button>
+        </div>
+    </div>
+
+    <!-- 上传结果 -->
+    <div class="result-box" id="result-box">
+        <h3 id="result-title">📋 上传结果</h3>
+        <div class="result-list" id="result-list"></div>
+        <div class="last-upload" id="last-upload"></div>
+    </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var passwordChanged = false;
+
+async function api(method, url, body) {
+    var opts = { method: method, headers: {} };
+    if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    var r = await fetch(url, opts);
+    return r.json();
+}
+
+async function loadConfig() {
+    var cfg = await api('GET', '/api/ftp_config');
+    document.getElementById('host').value = cfg.host || '';
+    document.getElementById('port').value = cfg.port || 21;
+    document.getElementById('user').value = cfg.user || '';
+    document.getElementById('password').value = cfg.password || '';
+    document.getElementById('password').placeholder = cfg.password ? '******** (留空不修改)' : '输入密码';
+    document.getElementById('remote_path').value = cfg.remote_path || '';
+    document.getElementById('enabled').checked = !!cfg.enabled;
+    document.getElementById('upload_on_rotate').checked = !!cfg.upload_on_rotate;
+    document.getElementById('keep_local').checked = !!cfg.keep_local;
+    updateStatusIndicator(cfg.enabled);
+}
+
+function updateStatusIndicator(enabled) {
+    var dot = document.getElementById('status-dot');
+    var text = document.getElementById('status-text');
+    if (enabled) { dot.className = 'status-dot on'; text.textContent = '已启用'; }
+    else { dot.className = 'status-dot off'; text.textContent = '未启用'; }
+}
+
+function getConfig() {
+    var pwd = document.getElementById('password').value;
+    return {
+        enabled: document.getElementById('enabled').checked,
+        host: document.getElementById('host').value.trim(),
+        port: parseInt(document.getElementById('port').value) || 21,
+        user: document.getElementById('user').value.trim(),
+        password: (pwd && pwd !== '********') ? pwd : undefined,
+        remote_path: document.getElementById('remote_path').value.trim(),
+        upload_on_rotate: document.getElementById('upload_on_rotate').checked,
+        keep_local: document.getElementById('keep_local').checked
+    };
+}
+
+async function saveConfig() {
+    var btn = document.getElementById('btn-save');
+    btn.disabled = true; btn.textContent = '保存中...';
+    try {
+        var cfg = getConfig();
+        var r = await api('POST', '/api/ftp_config', cfg);
+        if (r.success) {
+            showToast('配置已保存', 'ok');
+            await loadConfig();
+        } else {
+            showToast('保存失败: ' + (r.message || '未知错误'), 'err');
+        }
+    } catch(e) {
+        showToast('保存失败: ' + e.message, 'err');
+    }
+    btn.disabled = false; btn.textContent = '💾 保存配置';
+}
+
+async function testConn() {
+    var btn = document.getElementById('btn-test');
+    btn.disabled = true; btn.textContent = '测试中...';
+    try {
+        var r = await api('GET', '/api/ftp_test');
+        if (r.success) {
+            showToast('连接成功', 'ok');
+        } else {
+            showToast('连接失败: ' + (r.message || ''), 'err');
+        }
+    } catch(e) {
+        showToast('请求失败: ' + e.message, 'err');
+    }
+    btn.disabled = false; btn.textContent = '🔌 测试连接';
+}
+
+async function doUpload() {
+    var btn = document.getElementById('btn-upload');
+    btn.disabled = true; btn.textContent = '上传中...';
+    var box = document.getElementById('result-box');
+    var list = document.getElementById('result-list');
+    box.classList.add('show');
+    list.innerHTML = '<div style="color:var(--text2);padding:8px">上传中，请稍候...</div>';
+    try {
+        var r = await api('GET', '/api/ftp_upload');
+        if (r.success && r.results) {
+            var ok = 0, fail = 0;
+            list.innerHTML = r.results.map(function(item) {
+                if (item.ok) ok++; else fail++;
+                return '<div class="result-item">' +
+                    '<span class="icon ' + (item.ok ? 'ok' : 'fail') + '">' + (item.ok ? '✓' : '✗') + '</span>' +
+                    '<span class="fname">' + esc(item.file) + '</span>' +
+                    '<span class="msg">' + esc(item.msg || '') + '</span>' +
+                '</div>';
+            }).join('');
+            document.getElementById('result-title').textContent =
+                '📋 上传结果 — ' + ok + ' 成功 / ' + fail + ' 失败 / ' + r.results.length + ' 文件';
+            document.getElementById('last-upload').textContent =
+                '上传时间: ' + new Date().toLocaleString();
+            if (fail === 0) showToast(ok + ' 个文件上传成功', 'ok');
+            else showToast(ok + ' 成功, ' + fail + ' 失败', 'err');
+        } else {
+            list.innerHTML = '<div style="color:var(--red);padding:8px">' + esc(r.message || '上传失败') + '</div>';
+            showToast(r.message || '上传失败', 'err');
+        }
+    } catch(e) {
+        list.innerHTML = '<div style="color:var(--red);padding:8px">请求失败: ' + esc(e.message) + '</div>';
+        showToast('请求失败: ' + e.message, 'err');
+    }
+    btn.disabled = false; btn.textContent = '⬆ 立即上传';
+}
+
+function esc(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+var toastTimer = null;
+function showToast(msg, type) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + (type || '');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function() { t.className = 'toast ' + (type || ''); }, 3000);
+}
+
+// 密码输入标记
+document.getElementById('password').addEventListener('input', function() {
+    passwordChanged = true;
+    if (this.value === '********') { this.value = ''; }
+});
+
+loadConfig();
+</script>
+</body>
+</html>

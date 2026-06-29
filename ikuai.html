@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>爱快路由器监控</title>
+<style>
+:root {
+    --bg: #0a0c15; --surface: rgba(22,27,42,.7); --surface2: rgba(30,36,56,.55);
+    --border: rgba(113,119,144,.2); --text: #e6edf3; --text2: #8b949e;
+    --green: #4ade80; --red: #f87171; --yellow: #facc15; --blue: #60a5fa; --orange: #f0883e;
+    --green-bg: rgba(63,185,80,.12); --red-bg: rgba(248,81,73,.12);
+    --yellow-bg: rgba(210,153,34,.12);
+    --radius: 12px; --mono: 'JetBrains Mono', monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: var(--bg); color: var(--text); min-height: 100vh; }
+.topbar { display: flex; align-items: center; justify-content: space-between;
+           padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 8px; }
+.topbar h1 { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.topbar .actions { display: flex; gap: 8px; }
+.topbar button { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+                  padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 12px; }
+.topbar button:hover { border-color: var(--blue); }
+.container { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+
+/* 状态卡片 */
+.status-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 16px; position: relative; overflow: hidden; }
+.card .label { font-size: 11px; text-transform: uppercase; color: var(--text2); letter-spacing: .5px; margin-bottom: 6px; }
+.card .value { font-size: 26px; font-weight: 700; font-family: var(--mono); }
+.card .sub { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.card.online { border-left: 3px solid var(--green); }
+.card.offline { border-left: 3px solid var(--red); }
+.card.warning { border-left: 3px solid var(--yellow); }
+.green-text { color: var(--green); }
+.red-text { color: var(--red); }
+
+/* 表格 */
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 20px; }
+.table-title { padding: 10px 16px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border);
+               display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.table-title .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--surface2); color: var(--text2); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { background: var(--surface2); padding: 8px 12px; text-align: left; font-size: 11px; color: var(--text2);
+    text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }
+td { padding: 8px 12px; border-top: 1px solid var(--border); white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+tr:hover td { background: rgba(88,166,255,.06); }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.badge-up { background: var(--green-bg); color: var(--green); }
+.badge-down { background: var(--red-bg); color: var(--red); }
+.badge-warn { background: var(--yellow-bg); color: var(--yellow); }
+.badge-static { background: rgba(88,166,255,.12); color: var(--blue); }
+
+.err-msg { color: var(--red); padding: 40px; text-align: center; font-size: 14px; }
+.loading { color: var(--text2); padding: 40px; text-align: center; }
+.refresh-info { float: right; font-size: 11px; color: var(--text2); font-weight: normal; }
+
+/* Tab 切换 */
+.tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+.tab { padding: 10px 16px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text2); user-select: none; }
+.tab.active { color: var(--text); border-bottom-color: var(--blue); }
+.tab:hover { color: var(--text); }
+
+/* 趋势图表 */
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.chart-grid.full { grid-template-columns: 1fr; }
+@media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } }
+.chart-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+.chart-box .ctitle { font-size: 13px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.chart-box .ctitle .now { font-size: 12px; color: var(--text2); font-weight: 400; font-family: var(--mono); }
+.chart-wrap { position: relative; height: 220px; }
+.chart-wrap.tall { height: 240px; }
+.mini-stat { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text2); }
+.mini-stat b { color: var(--text); font-family: var(--mono); }
+
+/* 趋势控制栏 */
+.trend-controls { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.ctrl-group { display: flex; align-items: center; gap: 8px; }
+.ctrl-label { font-size: 12px; color: var(--text2); white-space: nowrap; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg-btn { background: transparent; border: none; color: var(--text2); font-size: 12px; padding: 5px 10px; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.seg-btn:hover { color: var(--text); background: var(--surface-hover); }
+.seg-btn.active { background: var(--blue); color: #fff; }
+.ctrl-refresh { background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.ctrl-refresh:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .topbar,.section,.card { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  body { font-family: "Poppins", sans-serif; -webkit-font-smoothing: antialiased; }
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: rgba(113,119,144,.3); border-radius: 10px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="topbar">
+    <h1>📡 爱快路由器
+        <span id="router-status" class="badge badge-down">离线</span>
+    </h1>
+    <div class="actions">
+        <a href="/" style="text-decoration:none"><button>← 仪表盘</button></a>
+        <a href="/config.html" style="text-decoration:none"><button>⚙️ 配置</button></a>
+        <a href="/admin.html" style="text-decoration:none"><button>🔧 管理</button></a>
+        <a href="/ftp_config.html" style="text-decoration:none"><button>📁 FTP</button></a>
+        <a href="/webhook.html" style="text-decoration:none"><button>🔔 钉钉</button></a>
+        <button onclick="loadAll()">🔄 刷新</button>
+        <button onclick="toggleAutoRefresh()" id="auto-refresh-btn">⏱ 自动刷新</button>
+    </div>
+</div>
+<div class="container">
+    <div id="loading-msg" class="loading">正在连接路由器...</div>
+
+    <!-- 概览卡片 -->
+    <div class="status-row" id="overview-row" style="display:none"></div>
+
+    <!-- Tab 按钮 -->
+    <div class="tabs" id="tab-bar">
+        <div class="tab active" data-tab="wan" onclick="switchTab('wan')">🌐 WAN</div>
+        <div class="tab" data-tab="lan" onclick="switchTab('lan')">🏠 LAN</div>
+        <div class="tab" data-tab="traffic" onclick="switchTab('traffic')">📊 流量</div>
+        <div class="tab" data-tab="terminals" onclick="switchTab('terminals')">📱 终端 (<span id="term-count">0</span>)</div>
+        <div class="tab" data-tab="dhcp" onclick="switchTab('dhcp')">📋 DHCP</div>
+        <div class="tab" data-tab="arp" onclick="switchTab('arp')">🔗 ARP (<span id="arp-count-tab">0</span>)</div>
+        <div class="tab" data-tab="dns" onclick="switchTab('dns')">🔍 DNS</div>
+        <div class="tab" data-tab="trend" onclick="switchTab('trend')">📈 趋势(7天)</div>
+    </div>
+
+    <!-- WAN -->
+    <div class="table-wrap" id="wan-section" style="display:block">
+        <div class="table-title">🌐 WAN 口状态 <span class="refresh-info" id="wan-time"></span></div>
+        <div style="overflow-x:auto"><table><thead><tr>
+            <th>名称</th><th>PPPoE</th><th>外网</th><th>公网IP</th><th>网关</th><th>DNS</th><th>接口</th>
+        </tr></thead><tbody id="wan-tbody"></tbody></table></div>
+    </div>
+
+    <!-- LAN -->
+    <div class="table-wrap" id="lan-section" style="display:none">
+        <div class="table-title">🏠 LAN 口配置 <span class="refresh-info" id="lan-time"></span></div>
+        <div style="overflow-x:auto"><table><thead><tr>
+            <th>名称</th><th>IP地址</th><th>掩码</th><th>DHCP服务</th><th>绑定接口</th><th>备注</th>
+        </tr></thead><tbody id="lan-tbody"></tbody></table></div>
+    </div>
+
+    <!-- 流量 -->
+    <div class="table-wrap" id="traffic-section" style="display:none">
+        <div class="table-title">📊 接口实时流量 <span class="refresh-info" id="traffic-time"></span></div>
+        <div style="overflow-x:auto"><table><thead><tr>
+            <th>接口</th><th>上行</th><th>下行</th><th>累计上行</th><th>累计下行</th><th>上行丢包</th><th>下行丢包</th>
+        </tr></thead><tbody id="traffic-tbody"></tbody></table></div>
+    </div>
+
+    <!-- 终端列表 (DHCP租约 + ARP交叉比对) -->
+    <div class="table-wrap" id="terminals-section" style="display:none">
+        <div class="table-title">📱 终端列表 <span class="refresh-info" id="terminals-time"></span> <span id="term-online-count" style="font-size:12px;color:var(--green);margin-left:8px"></span></div>
+        <div style="overflow-x:auto"><table><thead><tr>
+            <th>名称</th><th>IP地址</th><th>MAC</th><th>接口</th><th>类型</th><th>状态</th><th>剩余租约</th>
+        </tr></thead><tbody id="terminals-tbody"></tbody></table></div>
+    </div>
+
+    <!-- DHCP 配置 -->
+    <div class="table-wrap" id="dhcp-section" style="display:none">
+        <div class="table-title">📋 DHCP 服务器配置 <span class="refresh-info" id="dhcp-time"></span></div>
+        <div style="overflow-x:auto"><table><thead><tr>
+            <th>名称</th><th>接口</th><th>地址池</th><th>网关</th><th>DNS1</th><th>DNS2</th><th>租期(分)</th><th>状态</th>
+        </tr></thead><tbody id="dhcp-tbody"></tbody></table></div>
+    </div>
+
+    <!-- ARP 表 -->
+    <div class="table-wrap" id="arp-section" style="display:none">
+        <div class="table-title">🔗 ARP 表 <span class="refresh-info" id="arp-time"></span></div>
+        <div style="overflow-x:auto"><table><thead><tr>
+            <th>ID</th><th>IP地址</th><th>MAC</th><th>接口</th><th>标签名</th><th>绑定类型</th><th>绑定状态</th>
+        </tr></thead><tbody id="arp-tbody"></tbody></table></div>
+    </div>
+
+    <!-- DNS 配置 -->
+    <div class="table-wrap" id="dns-section" style="display:none">
+        <div class="table-title">🔍 DNS 配置 <span class="refresh-info" id="dns-time"></span></div>
+        <div style="padding:16px" id="dns-content"></div>
+    </div>
+
+    <!-- 趋势图表 -->
+    <div id="trend-section" style="display:none">
+        <!-- 实时卡片 -->
+        <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+            <div class="card" style="flex:1;min-width:120px;padding:12px 16px">
+                <div class="label">CPU</div>
+                <div class="value" id="live-cpu" style="font-size:22px">--</div>
+            </div>
+            <div class="card" style="flex:1;min-width:120px;padding:12px 16px">
+                <div class="label">内存</div>
+                <div class="value" id="live-mem" style="font-size:22px">--</div>
+            </div>
+            <div class="card" style="flex:1;min-width:120px;padding:12px 16px">
+                <div class="label">连接数</div>
+                <div class="value" id="live-conn" style="font-size:22px">--</div>
+            </div>
+            <div class="card" style="flex:1;min-width:120px;padding:12px 16px">
+                <div class="label">在线终端</div>
+                <div class="value" id="live-term" style="font-size:22px">--</div>
+            </div>
+        </div>
+        <!-- 控制栏：时间范围 + 颗粒度 -->
+        <div class="trend-controls">
+            <div class="ctrl-group">
+                <span class="ctrl-label">时间范围</span>
+                <div class="seg" id="seg-days">
+                    <button class="seg-btn" data-val="1">24小时</button>
+                    <button class="seg-btn" data-val="3">3天</button>
+                    <button class="seg-btn" data-val="7">7天</button>
+                </div>
+            </div>
+            <div class="ctrl-group">
+                <span class="ctrl-label">聚合颗粒度</span>
+                <div class="seg" id="seg-bucket">
+                    <button class="seg-btn" data-val="5">5分钟</button>
+                    <button class="seg-btn" data-val="15">15分钟</button>
+                    <button class="seg-btn" data-val="30">30分钟</button>
+                    <button class="seg-btn" data-val="60">1小时</button>
+                    <button class="seg-btn" data-val="360">6小时</button>
+                </div>
+            </div>
+            <button class="ctrl-refresh" onclick="loadTrendCharts(true)" title="刷新数据">↻ 刷新</button>
+        </div>
+        <div class="chart-grid">
+            <div class="chart-box">
+                <div class="ctitle">🖥 路由器 CPU 使用率 <span class="now" id="cpu-now">趋势</span></div>
+                <div class="chart-wrap"><canvas id="cpuChart"></canvas></div>
+            </div>
+            <div class="chart-box">
+                <div class="ctitle">💾 路由器内存使用率 <span class="now" id="mem-now">趋势</span></div>
+                <div class="chart-wrap"><canvas id="memChart"></canvas></div>
+            </div>
+        </div>
+        <div class="chart-grid full">
+            <div class="chart-box">
+                <div class="ctitle">🌐 网络延迟 (RTT) <span class="now">网关 / IPv4 / IPv6</span></div>
+                <div class="chart-wrap tall"><canvas id="rttChart"></canvas></div>
+            </div>
+        </div>
+        <div style="font-size:11px;color:var(--text2);text-align:center;margin-top:4px">
+            数据每 60 秒采集一次 · <span id="trend-range">加载中...</span>
+        </div>
+    </div>
+
+</div>
+
+<script>
+let autoRefreshTimer = null;
+
+// ─── 工具函数 ────────────────────────────────────────────────────
+function fmtBytes(b) {
+    if (!b || b == '0') return '0 B';
+    b = Number(b);
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+    return b.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+function fmtSpeed(bs) {
+    if (!bs || bs == '0') return '0 B/s';
+    var bytes = Number(bs);  // 爱快 API 返回 B/s (字节/秒)
+    var mbps = bytes * 8 / 1000000;  // B/s → bps → Mbps
+    if (bytes < 1024) return bytes.toFixed(0) + ' B/s';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB/s (' + mbps.toFixed(2) + ' Mbps)';
+    return (bytes / 1048576).toFixed(2) + ' MB/s (' + mbps.toFixed(1) + ' Mbps)';
+}
+function esc(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function wanStatusStr(code) {
+    return {0:'断开', 1:'拨号中', 2:'已连接', 3:'失败', 4:'断开中'}[code] || '未知('+code+')';
+}
+function internetStr(code) {
+    return {0:'未检测', 1:'不通', 2:'通畅'}[code] || '未知('+code+')';
+}
+
+async function apiFetch(url) {
+    try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const text = await r.text();
+        // 防止后端返回 HTML 错误页面（如 500、代理错误等）
+        if (text.trim().startsWith('<') || text.trim().startsWith('<!')) {
+            throw new Error('服务器返回了非 JSON 数据（可能是路由器连接失败），请检查 Python 日志');
+        }
+        return JSON.parse(text);
+    } catch(e) {
+        return { error: String(e.message || e) };
+    }
+}
+
+// 安全调用渲染函数，不会因单个报错影响其他板块
+function safeRender(fnName, fn, ...args) {
+    try { fn(...args); } catch(e) { console.error('[ikuai] ' + fnName + ' 渲染出错:', e); }
+}
+
+// ─── 渲染函数 ────────────────────────────────────────────────────
+
+function renderOverview(d) {
+    const row = document.getElementById('overview-row');
+    const wan = (d.wan && d.wan.data && d.wan.data.length) ? d.wan.data[0] : null;
+    const leases = (d.dhcp_lease && d.dhcp_lease.data) || [];
+    const arps = (d.arp && d.arp.data) || [];
+    const ifaces = (d.monitor_iface && d.monitor_iface.iface_stream) || [];
+    // 取 WAN 口流量作为外网上下行（优先 wan1，其次任意 wan 开头接口）
+    const wanIface = ifaces.find(i => i.interface === 'wan1')
+                  || ifaces.find(i => i.interface && i.interface.startsWith('wan'))
+                  || ifaces[0];
+
+    row.innerHTML = [
+        '<div class="card ' + (wan && wan.pppoe_status === 2 ? 'online' : 'warning') + '">' +
+            '<div class="label">WAN 状态</div>' +
+            '<div class="value">' + (wan ? esc(wanStatusStr(wan.pppoe_status)) : '?') + '</div>' +
+            (wan ? '<div class="sub">外网: ' + esc(internetStr(wan.internet)) + '</div>' : '') +
+        '</div>',
+        '<div class="card online">' +
+            '<div class="label">公网 IP</div>' +
+            '<div class="value" style="font-size:18px">' + (wan && wan.pppoe_ip_addr ? esc(wan.pppoe_ip_addr) : '-') + '</div>' +
+        '</div>',
+        '<div class="card online">' +
+            '<div class="label">终端数</div>' +
+            '<div class="value">' + (d.lease_total || leases.length || 0) + '</div>' +
+            '<div class="sub">DHCP 租约</div>' +
+        '</div>',
+        '<div class="card online">' +
+            '<div class="label">ARP 条目</div>' +
+            '<div class="value">' + (d.arp_total || arps.length || 0) + '</div>' +
+        '</div>',
+        '<div class="card online" id="card-conn">' +
+            '<div class="label">连接数</div>' +
+            '<div class="value" id="conn-num">--</div>' +
+            '<div class="sub">有线 <span id="conn-wired">--</span> | 无线 <span id="conn-wifi">--</span></div>' +
+        '</div>',
+        '<div class="card warning">' +
+            '<div class="label">↑ 上行 <span style="font-size:10px;color:var(--text2)">' + (wanIface ? esc(wanIface.interface) : '') + '</span></div>' +
+            '<div class="value">' + (wanIface ? fmtSpeed(wanIface.upload) : '?') + '</div>' +
+        '</div>',
+        '<div class="card warning">' +
+            '<div class="label">↓ 下行 <span style="font-size:10px;color:var(--text2)">' + (wanIface ? esc(wanIface.interface) : '') + '</span></div>' +
+            '<div class="value">' + (wanIface ? fmtSpeed(wanIface.download) : '?') + '</div>' +
+        '</div>',
+    ].join('');
+    row.style.display = 'grid';
+}
+
+function renderWan(d) {
+    const tbody = document.getElementById('wan-tbody');
+    const list = (d && d.data) || [];
+    if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2)">暂无WAN数据</td></tr>';
+        return;
+    }
+    tbody.innerHTML = list.map(w => {
+        const up = w.pppoe_status == 2;
+        const inet = w.internet == 2;
+        return '<tr>' +
+            '<td>' + esc(w.name || w.tagname || '?') + '</td>' +
+            '<td><span class="badge ' + (up ? 'badge-up' : 'badge-down') + '">' + esc(wanStatusStr(w.pppoe_status)) + '</span></td>' +
+            '<td><span class="badge ' + (inet ? 'badge-up' : 'badge-down') + '">' + esc(internetStr(w.internet)) + '</span></td>' +
+            '<td>' + esc(w.pppoe_ip_addr || '-') + '</td>' +
+            '<td>' + esc(w.pppoe_gateway || w.gateway || '-') + '</td>' +
+            '<td>' + esc((w.dns || '').replace(/,/g, ' / ') || '-') + '</td>' +
+            '<td>' + esc(w.bandeth || '-') + '</td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('wan-time').textContent = new Date().toLocaleTimeString();
+}
+
+function renderLan(d) {
+    const tbody = document.getElementById('lan-tbody');
+    const list = (d && d.data) || [];
+    if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text2)">暂无LAN数据</td></tr>';
+        return;
+    }
+    tbody.innerHTML = list.map(l => {
+        let ip = '-', mask = '-';
+        if (l.ip_mask) {
+            const p = l.ip_mask.split('/');
+            ip = p[0] || '-';
+            mask = p[1] || '-';
+        }
+        const dhcpOn = Number(l.dhcp_server) === 1;
+        return '<tr>' +
+            '<td>' + esc(l.name || l.tagname || '?') + '</td>' +
+            '<td>' + esc(ip) + '</td>' +
+            '<td>' + esc(mask) + '</td>' +
+            '<td><span class="badge ' + (dhcpOn ? 'badge-up' : 'badge-down') + '">' + (dhcpOn ? 'DHCP开启' : 'DHCP关闭') + '</span></td>' +
+            '<td>' + esc(l.bandeth || '-') + '</td>' +
+            '<td>' + esc(l.comment || '-') + '</td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('lan-time').textContent = new Date().toLocaleTimeString();
+}
+
+function renderTraffic(d) {
+    const tbody = document.getElementById('traffic-tbody');
+    const list = (d && d.iface_stream) || [];
+    if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2)">暂无流量数据</td></tr>';
+        return;
+    }
+    tbody.innerHTML = list.map(i => {
+        return '<tr>' +
+            '<td>' + esc(i.interface || '?') + '</td>' +
+            '<td>' + fmtSpeed(i.upload) + '</td>' +
+            '<td>' + fmtSpeed(i.download) + '</td>' +
+            '<td>' + fmtBytes(i.total_up || 0) + '</td>' +
+            '<td>' + fmtBytes(i.total_down || 0) + '</td>' +
+            '<td>' + (i.updropped || 0) + '</td>' +
+            '<td>' + (i.downdropped || 0) + '</td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('traffic-time').textContent = new Date().toLocaleTimeString();
+}
+
+function renderTerminals(d, arpData) {
+    const tbody = document.getElementById('terminals-tbody');
+    // 兼容两种数据格式：直接 data 数组 或 results.data
+    const raw = (d && d.results && d.results.data) || (d && d.data) || [];
+    if (!raw.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2)">暂无终端数据</td></tr>';
+        document.getElementById('term-count').textContent = '0';
+        document.getElementById('term-online-count').textContent = '';
+        return;
+    }
+    document.getElementById('term-count').textContent = String(raw.length);
+
+    // 构建 ARP 在线集合 (IP + MAC 双重匹配)
+    const arpList = (arpData && arpData.data) || (arpData && arpData.results && arpData.results.data) || [];
+    const arpIPs = new Set(arpList.map(a => a.ip_addr));
+    const arpMACs = new Set(arpList.map(a => (a.mac || '').toLowerCase()));
+
+    // 判断在线：出现在 ARP 表中 = 在线
+    var onlineCount = 0;
+    var rows = raw.map(t => {
+        const name = t.termname || t.hostname || '';
+        const ip = t.ip_addr || '';
+        const mac = (t.mac || '').toLowerCase();
+        const isOnline = arpIPs.has(ip) || arpMACs.has(mac);
+        if (isOnline) onlineCount++;
+
+        // 剩余租约时间
+        var leaseRemain = '';
+        if (t.timeout != null) {
+            var secs = Number(t.timeout);
+            if (secs > 3600) leaseRemain = Math.floor(secs / 3600) + 'h' + Math.floor((secs % 3600) / 60) + 'm';
+            else if (secs > 60) leaseRemain = Math.floor(secs / 60) + 'm';
+            else leaseRemain = secs + 's';
+            if (secs <= 0) leaseRemain = '已过期';
+        }
+
+        return {
+            online: isOnline,
+            html: '<tr>' +
+                '<td>' + esc(name || '-') + '</td>' +
+                '<td>' + esc(ip || '-') + '</td>' +
+                '<td style="font-family:monospace;font-size:11px">' + esc(t.mac || '-') + '</td>' +
+                '<td>' + esc(t.interface || '-') + '</td>' +
+                '<td>' + (t.static_status == 1 ? '<span class="badge badge-static">静态</span>' : '<span class="badge badge-warn">动态</span>') + '</td>' +
+                '<td>' + (isOnline ? '<span class="badge badge-up">在线</span>' : '<span class="badge badge-down">离线</span>') + '</td>' +
+                '<td style="font-size:11px">' + leaseRemain + '</td>' +
+            '</tr>'
+        };
+    });
+
+    // 在线排前面
+    rows.sort((a, b) => (b.online - a.online));
+    tbody.innerHTML = rows.map(r => r.html).join('');
+    document.getElementById('term-online-count').textContent = '(' + onlineCount + ' 在线 / ' + raw.length + ' 总数)';
+    document.getElementById('terminals-time').textContent = new Date().toLocaleTimeString();
+}
+
+function renderDHCPConfig(d) {
+    const tbody = document.getElementById('dhcp-tbody');
+    // 兼容两种数据格式
+    const raw = (d && d.results && d.results.data) || (d && d.data) || [];
+    if (!raw.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2)">暂无DHCP配置</td></tr>';
+        return;
+    }
+    tbody.innerHTML = raw.map(c => {
+        return '<tr>' +
+            '<td>' + esc(c.tagname || c.name || '?') + '</td>' +
+            '<td>' + esc(c.interface || '-') + '</td>' +
+            '<td>' + esc(c.addr_pool || '-') + '</td>' +
+            '<td>' + esc(c.gateway || '-') + '</td>' +
+            '<td>' + esc(c.dns1 || '-') + '</td>' +
+            '<td>' + esc(c.dns2 || '-') + '</td>' +
+            '<td>' + (c.lease && c.lease != 0 ? c.lease + '分' : '-') + '</td>' +
+            '<td><span class="badge ' + (c.enabled === 'yes' ? 'badge-up' : 'badge-down') + '">' + esc(c.enabled || '-') + '</span></td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('dhcp-time').textContent = new Date().toLocaleTimeString();
+}
+
+function renderARP(d) {
+    const tbody = document.getElementById('arp-tbody');
+    const raw = (d && d.results && d.results.data) || (d && d.data) || [];
+    if (!raw.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2)">暂无ARP数据</td></tr>';
+        document.getElementById('arp-count-tab').textContent = '0';
+        return;
+    }
+    document.getElementById('arp-count-tab').textContent = String(raw.length);
+    tbody.innerHTML = raw.map(a => {
+        return '<tr>' +
+            '<td>' + (a.id || '-') + '</td>' +
+            '<td>' + esc(a.ip_addr || a.addr || '-') + '</td>' +
+            '<td>' + esc(a.mac || a.hwaddr || '-') + '</td>' +
+            '<td>' + esc(a.interface || '-') + '</td>' +
+            '<td>' + esc(a.tagname || '-') + '</td>' +
+            '<td>' + (a.bind_type || '0') + '</td>' +
+            '<td>' + (a.bind_state || '0') + '</td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('arp-time').textContent = new Date().toLocaleTimeString();
+}
+
+function renderDNS(d) {
+    const el = document.getElementById('dns-content');
+    let html = '';
+
+    // 从主 API 数据取 WAN DNS（d 是 /api/ikuai/dns 的返回）
+    const wanRaw = (d && d.results && d.results.wan && d.results.wan.data) ||
+                   (d && d.wan && d.wan.data) || [];
+    if (wanRaw.length) {
+        html += '<div style="margin-bottom:16px">';
+        html += '<h3 style="font-size:13px;color:var(--text2);margin:0 0 8px">WAN 口 DNS</h3>';
+        wanRaw.forEach(w => {
+            html += '<div style="padding:4px 0;font-family:var(--mono);font-size:12px">' +
+                '<b>' + esc(w.name || w.tagname || '?') + '</b>: ' +
+                (esc(w.dns) || '<span style="color:var(--text2)">未配置</span>') +
+                '</div>';
+        });
+        html += '</div>';
+    }
+
+    // DHCP DNS 配置（从 /api/ikuai/dhcp 获取）
+    const dhcpRaw = (d && d.dhcp_dns) || null;
+    if (dhcpRaw) {
+        html += '<div>';
+        html += '<h3 style="font-size:13px;color:var(--text2);margin:0 0 8px">DHCP 下发 DNS</h3>';
+        html += '<div style="padding:4px 0;font-family:var(--mono);font-size:12px">' +
+            'DNS1: ' + esc(dhcpRaw.dns1 || '-') +
+            ' &nbsp;|&nbsp; DNS2: ' + esc(dhcpRaw.dns2 || '-') +
+            '</div>';
+        html += '</div>';
+    }
+
+    el.innerHTML = html || '<div style="color:var(--text2)">暂无DNS配置数据</div>';
+    document.getElementById('dns-time').textContent = new Date().toLocaleTimeString();
+}
+
+// ─── Tab 切换 ─────────────────────────────────────────────────────
+function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+    var active = document.querySelector('.tab[data-tab="' + name + '"]');
+    if (active) active.classList.add('active');
+
+    var sections = ['wan','lan','traffic','terminals','dhcp','arp','dns','trend'];
+    sections.forEach(function(n) {
+        var el = document.getElementById(n + '-section');
+        if (el) el.style.display = 'none';
+    });
+    var target = document.getElementById(name + '-section');
+    if (target) target.style.display = 'block';
+    // 切到趋势页时加载图表
+    if (name === 'trend') loadTrendCharts();
+    // 离开趋势页时停止实时刷新
+    if (name !== 'trend' && typeof trendLiveTimer !== 'undefined' && trendLiveTimer) {
+        clearInterval(trendLiveTimer);
+        trendLiveTimer = null;
+    }
+}
+
+// ─── 主加载 ─────────────────────────────────────────────────────────
+async function loadAll() {
+    var loading = document.getElementById('loading-msg');
+    var st = document.getElementById('router-status');
+    st.className = 'badge badge-down';
+    st.textContent = '连接中...';
+    loading.style.display = 'block';
+
+    // 1) 主请求获取所有核心数据
+    var ov = await apiFetch('/api/ikuai');
+    loading.style.display = 'none';
+
+    console.log('[ikuai] /api/ikuai keys:', Object.keys(ov));
+
+    if (ov.error && !ov.online) {
+        st.className = 'badge badge-down'; st.textContent = '离线';
+        document.getElementById('overview-row').innerHTML =
+            '<div class="card offline" style="grid-column:1/-1">' +
+            '<div class="label">错误</div><div class="value red-text">' + esc(ov.error) + '</div></div>';
+        document.getElementById('overview-row').style.display = 'grid';
+        return;
+    }
+
+    st.className = 'badge badge-up'; st.textContent = '在线';
+
+    // 用 safeRender 隔离每个渲染函数的错误
+    safeRender('overview', renderOverview, ov);
+    safeRender('wan', renderWan, ov.wan);
+    safeRender('lan', renderLan, ov.lan);
+    safeRender('traffic', renderTraffic, ov.monitor_iface);
+    safeRender('terminals', renderTerminals, ov.dhcp_lease, ov.arp);   // 传入ARP用于在线判断
+
+    // 2) 并行请求子资源（DHCP配置、ARP、DNS）
+    var [dhcpRes, arpRes, dnsRes] = await Promise.all([
+        apiFetch('/api/ikuai/dhcp'),
+        apiFetch('/api/ikuai/arp'),
+        apiFetch('/api/ikuai/dns'),
+    ]);
+
+    safeRender('dhcp', renderDHCPConfig, dhcpRes);
+    safeRender('arp', renderARP, arpRes);
+
+    // DNS 需要额外注入 DHCP 的 DNS 信息
+    if (dhcpRes && dhcpRes.results && dhcpRes.results.data && dhcpRes.results.data[0]) {
+        var dhcpDnsInfo = dhcpRes.results.data[0];
+        dnsRes.dhcp_dns = { dns1: dhcpDnsInfo.dns1, dns2: dhcpDnsInfo.dns2 };
+    }
+    safeRender('dns', renderDNS, dnsRes);
+
+    // 加载实时系统资源 (CPU/内存/连接数)
+    loadLiveSysinfo();
+    _lastLiveSysinfo = Date.now();
+
+    switchTab('wan');
+}
+
+function toggleAutoRefresh() {
+    var btn = document.getElementById('auto-refresh-btn');
+    if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+        btn.textContent = '⏱ 自动刷新';
+    } else {
+        autoRefreshTimer = setInterval(loadAll, 15000);
+        btn.textContent = '⏱ 停止刷新';
+    }
+}
+
+// ─── 趋势图表 (7天 CPU/内存/延迟) ──────────────────────────────────
+const CHART_COLORS = {
+    cpu:  '#f0883e', mem: '#58a6ff', gw: '#58a6ff',
+    v4:   '#3fb950', v6:  '#d29922',
+    grid: 'rgba(48,54,61,.5)', text: '#8b949e',
+};
+let cpuChart = null, memChart = null, rttChart = null;
+
+// ─── 趋势配置 (localStorage 持久化) ──────────────────────────────
+var trendConfig = { days: 7, bucket: 30 };
+
+function loadTrendConfig() {
+    try {
+        var saved = JSON.parse(localStorage.getItem('ikuai_trend_config'));
+        if (saved && typeof saved.days === 'number' && typeof saved.bucket === 'number') {
+            trendConfig = saved;
+        }
+    } catch(e) {}
+}
+
+function saveTrendConfig() {
+    try { localStorage.setItem('ikuai_trend_config', JSON.stringify(trendConfig)); } catch(e) {}
+}
+
+function initTrendControls() {
+    loadTrendConfig();
+
+    // 时间范围按钮
+    var dayBtns = document.querySelectorAll('#seg-days .seg-btn');
+    dayBtns.forEach(function(btn) {
+        if (Number(btn.dataset.val) === trendConfig.days) btn.classList.add('active');
+        btn.onclick = function() {
+            dayBtns.forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            trendConfig.days = Number(btn.dataset.val);
+            saveTrendConfig();
+            loadTrendCharts(true);
+        };
+    });
+
+    // 颗粒度按钮
+    var bktBtns = document.querySelectorAll('#seg-bucket .seg-btn');
+    bktBtns.forEach(function(btn) {
+        if (Number(btn.dataset.val) === trendConfig.bucket) btn.classList.add('active');
+        btn.onclick = function() {
+            bktBtns.forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            trendConfig.bucket = Number(btn.dataset.val);
+            saveTrendConfig();
+            loadTrendCharts(true);
+        };
+    });
+}
+
+function trendRangeLabel(days) {
+    if (days === 1) return '24小时';
+    return days + '天';
+}
+
+function trendBucketLabel(bucket) {
+    if (bucket < 60) return bucket + '分钟';
+    if (bucket === 60) return '1小时';
+    return (bucket / 60) + '小时';
+}
+
+function _commonChartOpts(yTitle) {
+    return {
+        responsive: true, maintainAspectRatio: false,
+        animation: { duration: 500 },
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+            legend: { labels: { color: CHART_COLORS.text, font: { size: 11 } } },
+            tooltip: { titleColor: '#e6edf3', bodyColor: '#e6edf3',
+                       backgroundColor: 'rgba(22,27,34,.95)', borderColor: '#30363d', borderWidth: 1 },
+        },
+        scales: {
+            x: { ticks: { color: CHART_COLORS.text, font: { size: 9 }, maxRotation: 0, autoSkipPadding: 24 },
+                 grid: { color: CHART_COLORS.grid } },
+            y: { ticks: { color: CHART_COLORS.text, font: { size: 9 } },
+                 grid: { color: CHART_COLORS.grid },
+                 title: { display: !!yTitle, text: yTitle, color: CHART_COLORS.text } },
+        },
+    };
+}
+
+function initTrendCharts() {
+    if (cpuChart) return;  // 只初始化一次
+    if (typeof Chart === 'undefined') return;
+
+    const pctOpts = _commonChartOpts('%');
+    pctOpts.scales.y.min = 0; pctOpts.scales.y.max = 100;
+
+    cpuChart = new Chart(document.getElementById('cpuChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'CPU %', data: [],
+            borderColor: CHART_COLORS.cpu, backgroundColor: CHART_COLORS.cpu + '22',
+            borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true, spanGaps: true }] },
+        options: pctOpts,
+    });
+    memChart = new Chart(document.getElementById('memChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: '内存 %', data: [],
+            borderColor: CHART_COLORS.mem, backgroundColor: CHART_COLORS.mem + '22',
+            borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: true, spanGaps: true }] },
+        options: JSON.parse(JSON.stringify(pctOpts)),
+    });
+    rttChart = new Chart(document.getElementById('rttChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [
+            { label: '网关', data: [], borderColor: CHART_COLORS.gw, backgroundColor: CHART_COLORS.gw + '22',
+              borderWidth: 1.5, pointRadius: 0, tension: 0.3, spanGaps: true },
+            { label: 'IPv4', data: [], borderColor: CHART_COLORS.v4, backgroundColor: CHART_COLORS.v4 + '22',
+              borderWidth: 1.5, pointRadius: 0, tension: 0.3, spanGaps: true },
+            { label: 'IPv6', data: [], borderColor: CHART_COLORS.v6, backgroundColor: CHART_COLORS.v6 + '22',
+              borderWidth: 1.5, pointRadius: 0, tension: 0.3, spanGaps: true },
+        ] },
+        options: _commonChartOpts('ms'),
+    });
+}
+
+let trendLiveTimer = null;
+
+async function loadTrendCharts(force) {
+    initTrendCharts();
+    initTrendControls();
+    if (!cpuChart) return;
+
+    var days = trendConfig.days;
+    var bucket = trendConfig.bucket;
+    var rangeText = trendRangeLabel(days) + ' · ' + trendBucketLabel(bucket) + ' 聚合';
+    document.getElementById('cpu-now').textContent = rangeText;
+    document.getElementById('mem-now').textContent = rangeText;
+    document.getElementById('trend-range').textContent = '加载中...';
+
+    var d = await apiFetch('/api/ikuai/history?days=' + days + '&bucket=' + bucket);
+    if (d.error) {
+        document.getElementById('trend-range').textContent = '加载失败: ' + d.error;
+        return;
+    }
+    var labels = d.labels || [];
+    cpuChart.data.labels = labels;  cpuChart.data.datasets[0].data = d.cpu || [];    cpuChart.update('none');
+    memChart.data.labels = labels;  memChart.data.datasets[0].data = d.mem || [];    memChart.update('none');
+    rttChart.data.labels = labels;
+    rttChart.data.datasets[0].data = d.gw_rtt || [];
+    rttChart.data.datasets[1].data = d.v4_rtt || [];
+    rttChart.data.datasets[2].data = d.v6_rtt || [];
+    rttChart.update('none');
+
+    if (labels.length >= 2) {
+        document.getElementById('trend-range').textContent =
+            labels[0] + ' ~ ' + labels[labels.length - 1] + ' · ' + labels.length + ' 个采样点';
+    } else if (labels.length === 0) {
+        document.getElementById('trend-range').textContent =
+            '暂无历史数据，数据将持续积累（最多保留7天）';
+    } else {
+        document.getElementById('trend-range').textContent = labels.length + ' 个采样点';
+    }
+    // 顺带刷新实时 CPU/内存
+    loadLiveSysinfo();
+    // 启动定时刷新实时数据 (10秒)
+    if (trendLiveTimer) clearInterval(trendLiveTimer);
+    trendLiveTimer = setInterval(loadLiveSysinfo, 10000);
+}
+
+async function loadLiveSysinfo() {
+    var s = await apiFetch('/api/ikuai/sysinfo');
+    if (!s.error && s.cpu != null) {
+        document.getElementById('live-cpu').textContent = s.cpu + '%';
+        document.getElementById('live-mem').textContent = s.mem + '%';
+        document.getElementById('live-conn').textContent = s.conn_num != null ? Math.round(s.conn_num) : '--';
+        document.getElementById('live-term').textContent = s.on_terminal != null ? Math.round(s.on_terminal) : '--';
+        // 概览卡片
+        var cn = document.getElementById('conn-num');
+        if (cn) cn.textContent = s.conn_num != null ? Math.round(s.conn_num).toLocaleString() : '--';
+        var cw = document.getElementById('conn-wired');
+        if (cw) cw.textContent = s.wired_terminal != null ? Math.round(s.wired_terminal) : '--';
+        var cf = document.getElementById('conn-wifi');
+        if (cf) cf.textContent = s.wireless_terminal != null ? Math.round(s.wireless_terminal) : '--';
+    } else {
+        document.getElementById('live-cpu').textContent = '不可用';
+        document.getElementById('live-mem').textContent = '不可用';
+        document.getElementById('live-conn').textContent = '--';
+        document.getElementById('live-term').textContent = '--';
+        var cn = document.getElementById('conn-num');
+        if (cn) cn.textContent = '--';
+        var cw = document.getElementById('conn-wired');
+        if (cw) cw.textContent = '--';
+        var cf = document.getElementById('conn-wifi');
+        if (cf) cf.textContent = '--';
+    }
+}
+
+// 全局系统信息定时器 (不管在哪个 Tab 都保持连接数等卡片更新)
+var sysinfoTimer = setInterval(function() {
+    if (document.getElementById('conn-num') && (!window._lastSysinfo || Date.now() - window._lastSysinfo > 10000)) {
+        loadLiveSysinfo();
+        window._lastSysinfo = Date.now();
+    }
+}, 12000);
+
+// 启动
+loadAll();
+</script>
+</body>
+</html>

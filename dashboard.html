@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络监控仪表盘 v3</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%2358a6ff'/%3E%3Cstop offset='100%25' stop-color='%233fb950'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='url(%23g)' stroke-width='2.5' opacity='.3'/%3E%3Ccircle cx='32' cy='32' r='14' fill='none' stroke='url(%23g)' stroke-width='2' opacity='.5'/%3E%3Cpath d='M8 32h14l4-12 6 24 6-18 4 6h14' fill='none' stroke='url(%23g)' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+:root {
+    --body-font: "Poppins", -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --bg: #0c0e14;
+    --theme-bg: rgba(18 22 34 / 55%);
+    --surface: rgba(18 22 34 / 35%);
+    --surface2: rgba(22 28 46 / 25%);
+    --border: rgba(113 119 144 / 20%);
+    --text: #f1f5f9;
+    --text2: rgba(148 163 184 / 85%);
+    --green: #4ade80; --red: #f87171; --yellow: #facc15; --blue: #60a5fa;
+    --green-bg: rgba(74,222,128,.12); --red-bg: rgba(248,113,113,.12);
+    --yellow-bg: rgba(250,204,21,.12); --blue-bg: rgba(96,165,250,.12);
+    --radius: 12px; --mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+* { margin:0; padding:0; box-sizing: border-box; }
+body { font-family: var(--body-font); font-weight: 400;
+    background: #090a0f;
+    color: var(--text); min-height: 100vh;
+    -webkit-font-smoothing: antialiased; }
+
+/* 玻璃拟态全局叠加 */
+.topbar, .status-card, .chart-box, .panel, .target-card, .ikuai-bar, .section, .card {
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+
+/* 顶栏 */
+.topbar { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 24px; background: var(--surface);
+    border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 8px;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.topbar h1 { font-size: 15px; font-weight: 600; white-space: nowrap; display:flex; align-items:center; gap:6px; }
+/* Mac 风格窗口圆点 */
+.win-dots { display: flex; gap: 6px; margin-right: 14px; flex-shrink: 0; }
+.win-dots span { width: 10px; height: 10px; border-radius: 50%; }
+.win-dots span:nth-child(1) { background: #f96057; }
+.win-dots span:nth-child(2) { background: #f8ce52; }
+.win-dots span:nth-child(3) { background: #5fcf65; }
+.topbar .meta { font-size: 12px; color: var(--text2); display: flex; gap: 16px; flex-wrap: wrap; }
+.topbar .confidence { font-size: 11px; padding: 2px 8px; border-radius: 12px; }
+.topbar .confidence.high   { background: var(--green-bg); color: var(--green); }
+.topbar .confidence.medium { background: var(--yellow-bg); color: var(--yellow); }
+.topbar .confidence.low    { background: var(--red-bg); color: var(--red); }
+.uptime-tag { font-size:10px; padding:1px 8px; border-radius:10px; border:1px solid var(--border); color:var(--text2); }
+
+/* 弹性数字时钟 */
+.bounce-clock { display: flex; align-items: center; gap: 3px; font-family: var(--mono); font-size: 22px; font-weight: 700;
+    color: var(--text); }
+.bounce-clock .digit-col { position: relative; min-width: 36px; height: 38px; overflow: hidden;
+    background: var(--surface2); border-radius: 6px; text-align: center; }
+.bounce-clock .digit-col .digit { display: block; line-height: 38px;
+    transition: transform .08s cubic-bezier(0.68, -0.55, 0.265, 1.55); }
+.bounce-clock .sep { color: var(--text2); font-size: 18px; width: 8px; text-align: center; flex-shrink: 0; }
+.topbar .actions { display: flex; gap: 0; flex-wrap: wrap; }
+.topbar .actions .nav-menu { display: flex; border-radius: 10px; overflow: hidden;
+    background: var(--surface2); border: 1px solid var(--border); }
+.topbar .actions .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-decoration: none; padding: 6px 14px; transition: background .25s, color .25s;
+    border-right: 1px solid var(--border); min-width: 56px; cursor: pointer; }
+.topbar .actions .nav-item:last-child { border-right: none; }
+.topbar .actions .nav-item:hover, .topbar .actions .nav-item:focus { outline: none;
+    background: var(--blue-bg); }
+.topbar .actions .nav-item .nav-icon { font-size: 16px; line-height: 1; margin-bottom: 2px; transition: transform .25s; }
+.topbar .actions .nav-item:hover .nav-icon { transform: translateY(-2px); }
+.topbar .actions .nav-item .nav-label { font-size: 10px; color: var(--text2); transition: color .25s; }
+.topbar .actions .nav-item:hover .nav-label { color: var(--blue); }
+
+/* 状态卡片 — tile风格 */
+.status-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 12px; padding: 12px 20px; }
+.status-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; position: relative; overflow: hidden;
+    min-height: 110px; display: flex; flex-direction: column; justify-content: space-between;
+    transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+    cursor: default;
+}
+.status-card:hover { transform: translateY(-3px); border-color: rgba(88,166,255,.4); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.status-card:focus-within { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--blue); }
+.status-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text2); margin-bottom: 2px; }
+.status-card .value { font-size: 26px; font-weight: 700; font-family: var(--mono); line-height: 1.15; }
+.status-card .sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+/* 顶部渐变状态条替代左侧色带 */
+.status-card::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; }
+.status-card.up::before { background: linear-gradient(90deg, var(--green), var(--green) 70%, transparent); }
+.status-card.down::before { background: linear-gradient(90deg, var(--red), var(--red) 70%, transparent); }
+.status-card.degraded::before { background: linear-gradient(90deg, var(--yellow), var(--yellow) 70%, transparent); }
+.status-card.unknown::before { background: linear-gradient(90deg, var(--text2), var(--text2) 70%, transparent); }
+/* 状态微光背景 */
+.status-card.up { background: linear-gradient(160deg, var(--surface) 40%, rgba(63,185,80,.06) 100%); }
+.status-card.down { background: linear-gradient(160deg, var(--surface) 40%, rgba(248,81,73,.06) 100%); }
+.status-card.degraded { background: linear-gradient(160deg, var(--surface) 40%, rgba(210,153,34,.06) 100%); }
+/* 彩色tile卡片 — 参考G:\code\web的tile风格 */
+.tile-card { min-height: 130px !important; }
+.tile-card::before { display: none; }
+.tile-card.cpu-tile { background: linear-gradient(160deg, rgba(59,130,246,.18) 0%, rgba(30,58,138,.12) 100%) !important;
+    border: 1px solid rgba(59,130,246,.25) !important; }
+.tile-card.cpu-tile .label, .tile-card.cpu-tile .sub { color: rgba(147,197,253,.9) !important; }
+.tile-card.bw-tile { background: linear-gradient(160deg, rgba(74,222,128,.15) 0%, rgba(20,83,45,.1) 100%) !important;
+    border: 1px solid rgba(74,222,128,.22) !important; }
+.tile-card.bw-tile .label, .tile-card.bw-tile .sub { color: rgba(134,239,172,.85) !important; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.badge.up { background: var(--green-bg); color: var(--green); }
+.badge.down { background: var(--red-bg); color: var(--red); }
+.badge.degraded { background: var(--yellow-bg); color: var(--yellow); }
+
+/* 爱快WAN状态条 */
+.ikuai-bar { margin: 0 20px 8px; padding: 8px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+              display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 11px; }
+.ikuai-bar .wan-item { display: flex; gap: 4px; align-items: center; }
+.ikuai-bar .wan-name { color: var(--text2); }
+.ikuai-bar .online-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+/* 图表区 */
+.charts-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 10px; padding: 0 20px; margin-bottom: 10px; }
+.chart-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.chart-box h3 { font-size: 12px; color: var(--text2); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+.chart-box .chart-canvas { width: 100%; height: 180px; position: relative; }
+.chart-box .chart-canvas canvas { width: 100% !important; height: 100% !important; }
+/* 颗粒度控制栏 */
+.seg-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.seg-label { font-size: 10px; color: var(--text2); text-transform: uppercase; white-space: nowrap; }
+.seg-btn { background: transparent; border: 1px solid var(--border); color: var(--text2);
+           padding: 2px 8px; border-radius: 10px; cursor: pointer; font-size: 10px; }
+.seg-btn:hover { border-color: var(--blue); color: var(--text); }
+.seg-btn.active { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+.chart-meta { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
+
+/* 事件/日志区 */
+.bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 20px 20px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         display: flex; flex-direction: column; max-height: 400px; }
+.panel-header { display: flex; align-items: center; justify-content: space-between;
+                padding: 8px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 6px; }
+.panel-header h3 { font-size: 12px; color: var(--text2); }
+.panel-header .filters { display: flex; gap: 4px; flex-wrap: wrap; }
+.panel-header .filters button { background: transparent; border: 1px solid var(--border); color: var(--text2);
+                             padding: 2px 8px; border-radius: 10px; cursor: pointer; font-size: 10px; }
+.panel-header .filters button.active { border-color: var(--blue); color: var(--blue); }
+.panel-body { flex: 1; overflow-y: auto; padding: 4px 0; font-family: var(--mono); font-size: 11px; line-height: 1.6; }
+.panel-body::-webkit-scrollbar { width: 6px; }
+.panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.event-entry { padding: 2px 14px; display: flex; gap: 6px; align-items: flex-start; }
+.event-entry:hover { background: var(--surface2); }
+.event-entry .ev-icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 11px; }
+.event-entry .ev-ts { color: var(--text2); white-space: nowrap; flex-shrink: 0; font-size: 10px; }
+.event-entry .ev-msg { word-break: break-all; }
+.ev-disconnect .ev-icon { color: var(--red); }
+.ev-recover .ev-icon { color: var(--green); }
+
+.log-entry { padding: 1px 14px; display: flex; gap: 6px; }
+.log-entry:hover { background: var(--surface2); }
+.log-entry .ts { color: var(--text2); white-space: nowrap; flex-shrink: 0; }
+.log-entry .level { width: 46px; flex-shrink: 0; font-weight: 600; }
+.log-entry .level.INFO { color: var(--blue); }
+.log-entry .level.WARN { color: var(--yellow); }
+.log-entry .level.ERROR { color: var(--red); }
+.log-entry .msg { word-break: break-all; }
+
+.empty-msg { padding: 24px; text-align: center; color: var(--text2); font-style: italic; }
+/* 监控目标面板 */
+.target-panel { margin: 0 20px 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+.target-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+.target-card h4 { font-size: 11px; color: var(--text2); margin-bottom: 8px; display:flex; align-items:center; gap:5px; }
+.target-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px; }
+.target-item { display: flex; align-items: center; gap: 5px; padding: 3px 8px;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.05);
+    border-radius: 6px; font-size: 11px; }
+.target-item .t-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.target-item .t-dot.ok { background: var(--green); }
+.target-item .t-dot.fail { background: var(--red); }
+.target-item .t-dot.unknown { background: var(--text2); }
+.target-item .t-name { color: var(--text); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.target-item .t-info { color: var(--text2); font-family: var(--mono); font-size: 10px; flex-shrink:0; }
+.pulse { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+.pulse-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+             box-shadow: 0 0 6px var(--green); animation: pulse 2s ease-in-out infinite; }
+.pulse-dot.off { background: var(--red); box-shadow: 0 0 6px var(--red); animation: none; }
+
+/* 加载动画 */
+.loader-overlay { position: fixed; inset: 0; z-index: 999;
+    background: radial-gradient(ellipse at 50% 50%, #0a1628 0%, #050d18 40%, #02060c 70%, #000000 100%);
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity .4s ease, visibility .4s ease; }
+.loader-overlay.hide { opacity: 0; visibility: hidden; pointer-events: none; }
+.loader { position: relative; width: 120px; height: 140px; }
+.loader:before { content: ""; position: absolute; bottom: 40px; left: 50px; height: 30px; width: 30px;
+    border-radius: 50%; background: var(--blue);
+    animation: loading-bounce 0.5s ease-in-out infinite alternate; }
+.loader:after { content: ""; position: absolute; right: 0; top: 0; height: 7px; width: 45px;
+    border-radius: 4px;
+    box-shadow: 0 5px 0 rgba(255,255,255,.15), -35px 50px 0 rgba(255,255,255,.15), -70px 95px 0 rgba(255,255,255,.15);
+    animation: loading-step 1s ease-in-out infinite; }
+@keyframes loading-bounce {
+    0% { transform: scale(1, 0.7); }
+    40% { transform: scale(0.8, 1.2); }
+    60% { transform: scale(1, 1); }
+    100% { bottom: 130px; }
+}
+@keyframes loading-step {
+    0% { box-shadow: 0 10px 0 rgba(0,0,0,0), 0 10px 0 rgba(255,255,255,.15),
+            -35px 50px 0 rgba(255,255,255,.15), -70px 90px 0 rgba(255,255,255,.15); }
+    100% { box-shadow: 0 10px 0 rgba(255,255,255,.15), -35px 50px 0 rgba(255,255,255,.15),
+            -70px 90px 0 rgba(255,255,255,.15), -70px 90px 0 rgba(0,0,0,0); }
+}
+
+/* 星空背景 */
+.stars-bg { position: fixed; inset: 0; z-index: -1; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 50%, #0a1628 0%, #050d18 40%, #02060c 70%, #000000 100%); }
+.stars-bg .stars { width: 1px; height: 1px; background: transparent;
+    box-shadow: 501px 811px #fff,1450px 1324px #fff,1093px 1780px #fff,1469px 678px #fff,904px 741px #fff,
+    1160px 781px #fff,1841px 1962px #fff,1630px 1667px #fff,1788px 676px #fff,367px 1734px #fff,
+    1343px 156px #fff,1283px 1142px #fff,1062px 378px #fff,1395px 467px #fff,1017px 1891px #fff,
+    137px 1114px #fff,1767px 1403px #fff,1543px 11px #fff,1078px 181px #fff,1189px 1574px #fff,
+    1697px 1551px #fff,439px 472px #fff,1491px 677px #fff,1364px 599px #fff,34px 382px #fff,
+    1221px 1584px #fff,1266px 1499px #fff,169px 1907px #fff,1219px 1125px #fff,659px 18px #fff,
+    1731px 1959px #fff,332px 1216px #fff,1913px 788px #fff,80px 712px #fff,326px 1605px #fff,
+    574px 1502px #fff,473px 1653px #fff,404px 975px #fff,322px 1797px #fff,425px 1321px #fff,
+    1121px 1797px #fff,731px 647px #fff,891px 1584px #fff,1523px 109px #fff,1379px 244px #fff,
+    865px 1064px #fff,493px 956px #fff,624px 1380px #fff,440px 619px #fff,1630px 767px #fff,
+    955px 1196px #fff,62px 729px #fff,126px 946px #fff,1256px 896px #fff,1444px 256px #fff,
+    661px 1628px #fff,1078px 1716px #fff,300px 737px #fff,1734px 413px #fff,1296px 129px #fff,
+    1771px 1678px #fff,977px 1764px #fff,1879px 549px #fff,665px 1531px #fff,89px 701px #fff;
+    animation: animStar 50s linear infinite; }
+.stars-bg .stars:after { content: ""; position: absolute; top: 2000px; width: 1px; height: 1px;
+    background: transparent;
+    box-shadow: 501px 811px #fff,1450px 1324px #fff,1093px 1780px #fff,1469px 678px #fff,904px 741px #fff,
+    1160px 781px #fff,1841px 1962px #fff,1630px 1667px #fff,1788px 676px #fff,367px 1734px #fff,
+    1343px 156px #fff,1283px 1142px #fff,1062px 378px #fff,1395px 467px #fff,1017px 1891px #fff; }
+.stars-bg .stars2 { width: 2px; height: 2px; background: transparent;
+    box-shadow: 1925px 1320px #fff,693px 1778px #fff,1016px 711px #fff,1171px 563px #fff,661px 1919px #fff,
+    1610px 44px #fff,1275px 140px #fff,1208px 1802px #fff,1473px 1587px #fff,11px 1117px #fff;
+    animation: animStar 100s linear infinite; }
+.stars-bg .stars2:after { content: ""; position: absolute; top: 2000px; width: 2px; height: 2px;
+    background: transparent;
+    box-shadow: 1925px 1320px #fff,693px 1778px #fff,1016px 711px #fff,1171px 563px #fff,661px 1919px #fff; }
+.stars-bg .stars3 { width: 3px; height: 3px; background: transparent;
+    box-shadow: 200px 981px #fff,1731px 521px #fff,132px 1039px #fff,1888px 1547px #fff,899px 1226px #fff;
+    animation: animStar 150s linear infinite; }
+.stars-bg .stars3:after { content: ""; position: absolute; top: 2000px; width: 3px; height: 3px;
+    background: transparent;
+    box-shadow: 200px 981px #fff,1731px 521px #fff,132px 1039px #fff,1888px 1547px #fff,899px 1226px #fff; }
+@keyframes animStar { from { transform: translateY(0); } to { transform: translateY(-2000px); } }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: rgba(113,119,144,.3); border-radius: 10px; }
+</style>
+</head>
+<body>
+<div class="stars-bg">
+    <div class="stars"></div>
+    <div class="stars2"></div>
+    <div class="stars3"></div>
+</div>
+<div class="loader-overlay" id="loaderOverlay">
+    <div class="loader"></div>
+</div>
+
+<div class="topbar">
+    <div class="win-dots"><span></span><span></span><span></span></div>
+    <h1>🏠 网络监控仪表盘 <span class="pulse-dot" id="liveDot"></span></h1>
+    <div class="meta">
+        <div class="bounce-clock" id="bounceClock">
+            <div class="digit-col"><span class="digit">0</span></div>
+            <div class="digit-col"><span class="digit">0</span></div>
+            <span class="sep">:</span>
+            <div class="digit-col"><span class="digit">0</span></div>
+            <div class="digit-col"><span class="digit">0</span></div>
+            <span class="sep">:</span>
+            <div class="digit-col"><span class="digit">0</span></div>
+            <div class="digit-col"><span class="digit">0</span></div>
+        </div>
+        <span class="uptime-tag" id="webUptime">0m 0s</span>
+        <span>置信度 <span id="confidence" class="confidence">-</span></span>
+        <span>断网 <span id="discCount">0</span> 次</span>
+    </div>
+    <div class="actions">
+        <div class="nav-menu">
+            <a href="/ikuai.html" class="nav-item"><span class="nav-icon">📡</span><span class="nav-label">爱快</span></a>
+            <a href="/config.html" class="nav-item"><span class="nav-icon">⚙️</span><span class="nav-label">配置</span></a>
+            <a href="/admin.html" class="nav-item"><span class="nav-icon">🔧</span><span class="nav-label">管理</span></a>
+            <a href="/ftp_config.html" class="nav-item"><span class="nav-icon">📁</span><span class="nav-label">FTP</span></a>
+            <a href="/music_config.html" class="nav-item"><span class="nav-icon">🎵</span><span class="nav-label">音乐</span></a>
+            <a href="/webhook.html" class="nav-item"><span class="nav-icon">🔔</span><span class="nav-label">钉钉</span></a>
+            <span class="nav-item" onclick="clearCharts()" style="cursor:pointer"><span class="nav-icon">🔄</span><span class="nav-label">刷新</span></span>
+            <span class="nav-item" onclick="location.reload()" style="cursor:pointer"><span class="nav-icon">🔃</span><span class="nav-label">重载</span></span>
+        </div>
+    </div>
+</div>
+
+<!-- 状态卡片 -->
+<div class="status-row">
+    <div class="status-card" id="card-gw">
+        <div class="label">🏠 网关 (IPv4)</div>
+        <div class="value" id="gwStatus">-</div>
+        <div class="sub" id="gwRtt">RTT: -</div>
+    </div>
+    <div class="status-card" id="card-v4">
+        <div class="label">🌍 外网 IPv4</div>
+        <div class="value" id="v4Status">-</div>
+        <div class="sub" id="v4Rtt">RTT: -</div>
+    </div>
+    <div class="status-card" id="card-v6">
+        <div class="label">🌏 外网 IPv6</div>
+        <div class="value" id="v6Status">-</div>
+        <div class="sub" id="v6Rtt">RTT: -</div>
+    </div>
+    <div class="status-card tile-card cpu-tile" id="card-sys">
+        <div class="label">💻 CPU / MEM</div>
+        <div class="value" id="sysResource">- / -</div>
+        <div class="sub">磁盘: <span id="diskPct">-</span>% &nbsp; 负载: <span id="sysLoad">-</span></div>
+    </div>
+    <div class="status-card tile-card bw-tile" id="card-bw">
+        <div class="label">📶 带宽 (RX / TX)</div>
+        <div class="value" id="bandwidth">- / -</div>
+        <div class="sub">kbps</div>
+    </div>
+</div>
+
+<!-- 监控目标状态 -->
+<div class="target-panel" id="targetPanel" style="display:none">
+    <div class="target-card">
+        <h4>🖥 内网设备</h4>
+        <div class="target-grid" id="lanGrid"></div>
+    </div>
+    <div class="target-card">
+        <h4>📶 外网检测</h4>
+        <div class="target-grid" id="wanGrid"></div>
+    </div>
+    <div class="target-card">
+        <h4>🔍 DNS / 域名</h4>
+        <div class="target-grid" id="dnsGrid"></div>
+    </div>
+</div>
+
+<!-- 爱快WAN状态 -->
+<div class="ikuai-bar" id="ikuaiBar" style="display:none;">
+    <span style="color:var(--text2);font-weight:600;">📡 爱快WAN口状态:</span>
+    <div id="ikuaiWanList"></div>
+    <span style="color:var(--text2);font-size:11px;" id="ikuaiHint">（路由器自身检测，权重60%）</span>
+</div>
+
+<!-- 图表区 -->
+<div class="charts-row">
+    <div class="chart-box">
+        <div class="chart-meta">
+            <h3>📈 延迟趋势</h3>
+            <span id="chart1Range" style="font-size:11px;color:var(--text2);">-</span>
+        </div>
+        <div class="seg-bar">
+            <span class="seg-label">时间范围</span>
+            <button class="seg-btn" data-key="rttDays" data-val="0.04" onclick="setTrendParam('rttDays','0.04',this)">1h</button>
+            <button class="seg-btn" data-key="rttDays" data-val="0.25" onclick="setTrendParam('rttDays','0.25',this)">6h</button>
+            <button class="seg-btn active" data-key="rttDays" data-val="1" onclick="setTrendParam('rttDays','1',this)">24h</button>
+            <button class="seg-btn" data-key="rttDays" data-val="3" onclick="setTrendParam('rttDays','3',this)">3d</button>
+            <button class="seg-btn" data-key="rttDays" data-val="7" onclick="setTrendParam('rttDays','7',this)">7d</button>
+            <span class="seg-label" style="margin-left:8px">颗粒度</span>
+            <button class="seg-btn" data-key="rttBucket" data-val="1" onclick="setTrendParam('rttBucket','1',this)">1m</button>
+            <button class="seg-btn active" data-key="rttBucket" data-val="5" onclick="setTrendParam('rttBucket','5',this)">5m</button>
+            <button class="seg-btn" data-key="rttBucket" data-val="15" onclick="setTrendParam('rttBucket','15',this)">15m</button>
+            <button class="seg-btn" data-key="rttBucket" data-val="30" onclick="setTrendParam('rttBucket','30',this)">30m</button>
+            <button class="seg-btn" data-key="rttBucket" data-val="60" onclick="setTrendParam('rttBucket','60',this)">1h</button>
+        </div>
+        <div class="chart-canvas"><canvas id="rttChart"></canvas></div>
+    </div>
+    <div class="chart-box">
+        <div class="chart-meta">
+            <h3>🎯 在线率 <span style="font-size:10px;color:var(--text2)">(Ping 成功率)</span></h3>
+            <span id="chart2Detail" style="font-size:11px;color:var(--text2);">-</span>
+        </div>
+        <div class="seg-bar">
+            <span class="seg-label">统计范围</span>
+            <button class="seg-btn" data-key="uptimeDays" data-val="0.04" onclick="setTrendParam('uptimeDays','0.04',this)">1h</button>
+            <button class="seg-btn active" data-key="uptimeDays" data-val="1" onclick="setTrendParam('uptimeDays','1',this)">24h</button>
+            <button class="seg-btn" data-key="uptimeDays" data-val="7" onclick="setTrendParam('uptimeDays','7',this)">7d</button>
+            <button class="seg-btn" data-key="uptimeDays" data-val="30" onclick="setTrendParam('uptimeDays','30',this)">30d</button>
+        </div>
+        <div class="chart-canvas"><canvas id="uptimeChart"></canvas></div>
+    </div>
+    <div class="chart-box">
+        <div class="chart-meta">
+            <h3>📉 延迟分布 <span id="histModeHint" style="font-size:10px;color:var(--text2);font-weight:400;margin-left:4px"></span></h3>
+            <span id="chart3Detail" style="font-size:11px;color:var(--text2);">-</span>
+        </div>
+        <div class="seg-bar">
+            <span class="seg-label">显示</span>
+            <button class="seg-btn active" data-key="histProto" data-val="all" onclick="setTrendParam('histProto','all',this)">全部</button>
+            <button class="seg-btn" data-key="histProto" data-val="gw" onclick="setTrendParam('histProto','gw',this)">网关</button>
+            <button class="seg-btn" data-key="histProto" data-val="v4" onclick="setTrendParam('histProto','v4',this)">IPv4</button>
+            <button class="seg-btn" data-key="histProto" data-val="v6" onclick="setTrendParam('histProto','v6',this)">IPv6</button>
+            <span class="seg-label" style="margin-left:8px">范围</span>
+            <button class="seg-btn" data-key="histDays" data-val="0.04" onclick="setTrendParam('histDays','0.04',this)">1h</button>
+            <button class="seg-btn active" data-key="histDays" data-val="1" onclick="setTrendParam('histDays','1',this)">24h</button>
+            <button class="seg-btn" data-key="histDays" data-val="3" onclick="setTrendParam('histDays','3',this)">3d</button>
+            <button class="seg-btn" data-key="histDays" data-val="7" onclick="setTrendParam('histDays','7',this)">7d</button>
+            <span class="seg-label" style="margin-left:8px">模式</span>
+            <button class="seg-btn active" data-key="histMode" data-val="stacked" onclick="setTrendParam('histMode','stacked',this)" title="堆叠柱状图 — 适合看总量分布">堆叠</button>
+            <button class="seg-btn" data-key="histMode" data-val="grouped" onclick="setTrendParam('histMode','grouped',this)" title="分组柱状图 — 适合横向对比">分组</button>
+        </div>
+        <div class="chart-canvas"><canvas id="histChart"></canvas></div>
+    </div>
+</div>
+
+<!-- 事件 + 日志 -->
+<div class="bottom-row">
+    <div class="panel">
+        <div class="panel-header">
+            <h3>📋 事件日志</h3>
+            <div class="filters">
+                <button class="active" onclick="filterEvents('all',this)">全部</button>
+                <button onclick="filterEvents('disconnect',this)">断网</button>
+                <button onclick="filterEvents('recover',this)">恢复</button>
+            </div>
+        </div>
+        <div class="panel-body" id="eventsBody"><div class="empty-msg">加载中...</div></div>
+    </div>
+    <div class="panel">
+        <div class="panel-header">
+            <h3>📝 最近日志</h3>
+            <div class="filters">
+                <button class="active" onclick="filterLogs('all',this)">全部</button>
+                <button onclick="filterLogs('WARN',this)">WARN</button>
+                <button onclick="filterLogs('ERROR',this)">ERROR</button>
+            </div>
+        </div>
+        <div class="panel-body" id="logsBody"><div class="empty-msg">加载中...</div></div>
+    </div>
+</div>
+
+<script>
+// ─── 全局状态 ───────────────────────────────────────
+let rttChart = null, uptimeChart = null, histChart = null;
+let allEvents = [], allLogs = [];
+let chartDataCache = null;
+
+const CHART_COLORS = {
+    gw:   '#58a6ff',
+    v4:   '#3fb950',
+    v6:   '#d29922',
+    down: '#f85149',
+    grid:  'rgba(48,54,61,.5)',
+    text:  '#8b949e',
+};
+
+// localStorage key
+const LS_KEY = 'dashboard_config';
+let dashCfg = {
+    rttDays: '1', rttBucket: '5',
+    uptimeDays: '1',
+    histProto: 'all', histDays: '1', histMode: 'stacked',
+};
+// 从 localStorage 加载
+try {
+    var saved = JSON.parse(localStorage.getItem(LS_KEY));
+    if (saved) Object.assign(dashCfg, saved);
+} catch(e) {}
+
+function saveDashCfg() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(dashCfg)); } catch(e) {}
+}
+
+// ─── 工具函数 ───────────────────────────────────────
+function statusClass(s) {
+    if (s === 'up' || s === true || s === 'online') return 'up';
+    if (s === 'degraded') return 'degraded';
+    if (s === 'down' || s === false || s === 'offline') return 'down';
+    return 'unknown';
+}
+function statusText(s) {
+    if (s === 'up' || s === true) return '在线';
+    if (s === 'degraded') return '降级';
+    if (s === 'down' || s === false) return '断开';
+    return '未知';
+}
+function badge(s) {
+    const c = statusClass(s);
+    return `<span class="badge ${c}">${statusText(s)}</span>`;
+}
+function fmtRtt(v) {
+    if (v === '?' || v === null || v === undefined || v === '-') return '?';
+    return typeof v === 'number' ? v.toFixed(1) + 'ms' : v;
+}
+function esc(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── 数据获取 ───────────────────────────────────────
+async function fetchStatus() {
+    try {
+        const r = await fetch('/api/status');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return await r.json();
+    } catch(e) {
+        console.error('[fetchStatus]', e);
+        return null;
+    }
+}
+
+async function fetchChartData() {
+    try {
+        var d = dashCfg.rttDays || '1';
+        var b = dashCfg.rttBucket || '5';
+        var url = '/api/chart-data?days=' + d + '&bucket=' + b;
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        chartDataCache = await r.json();
+        return chartDataCache;
+    } catch(e) {
+        console.error('[fetchChartData]', e);
+        return null;
+    }
+}
+
+async function fetchMonitorStatus() {
+    try {
+        const r = await fetch('/api/monitor_status');
+        if (!r.ok) return null;
+        return await r.json();
+    } catch(e) { return null; }
+}
+
+async function fetchEvents(type) {
+    try {
+        var url = '/api/events?limit=500';
+        if (type) url += '&type=' + type;
+        const r = await fetch(url);
+        if (!r.ok) return [];
+        return await r.json();
+    } catch(e) { return []; }
+}
+
+async function fetchLogs(level) {
+    try {
+        var url = '/api/logs?limit=500';
+        if (level) url += '&level=' + level;
+        const r = await fetch(url);
+        if (!r.ok) return [];
+        return await r.json();
+    } catch(e) { return []; }
+}
+
+// ─── 渲染状态卡片 ───────────────────────────────────────
+function renderStatus(data) {
+    if (!data) return;
+
+    // 网关
+    const gwCard = document.getElementById('card-gw');
+    gwCard.className = 'status-card ' + statusClass(data.gw_status);
+    document.getElementById('gwStatus').innerHTML = badge(data.gw_status);
+    document.getElementById('gwRtt').textContent = 'RTT: ' + fmtRtt(data.gw_rtt);
+
+    // IPv4
+    const v4Card = document.getElementById('card-v4');
+    v4Card.className = 'status-card ' + statusClass(data.v4_status);
+    document.getElementById('v4Status').innerHTML = badge(data.v4_status);
+    document.getElementById('v4Rtt').textContent = 'RTT: ' + fmtRtt(data.v4_rtt);
+
+    // IPv6
+    const v6Card = document.getElementById('card-v6');
+    v6Card.className = 'status-card ' + statusClass(data.v6_status);
+    document.getElementById('v6Status').innerHTML = badge(data.v6_status);
+    document.getElementById('v6Rtt').textContent = 'RTT: ' + fmtRtt(data.v6_rtt);
+
+    // 系统资源（取最新一条 system_stats）
+    const sysStats = (data.system_stats && data.system_stats.length > 0)
+        ? data.system_stats[data.system_stats.length - 1] : null;
+    const sysCard = document.getElementById('card-sys');
+    if (sysStats) {
+        sysCard.className = 'status-card up';
+        document.getElementById('sysResource').textContent =
+            sysStats.cpu_pct + '% / ' + sysStats.mem_pct + '%';
+        document.getElementById('diskPct').textContent = sysStats.disk_pct;
+        document.getElementById('sysLoad').textContent = sysStats.load1;
+    } else {
+        sysCard.className = 'status-card unknown';
+        document.getElementById('sysResource').textContent = '-';
+        document.getElementById('diskPct').textContent = '-';
+        document.getElementById('sysLoad').textContent = '-';
+    }
+
+    // 带宽
+    const rx = data.bandwidth_rx_kbps || 0;
+    const tx = data.bandwidth_tx_kbps || 0;
+    document.getElementById('bandwidth').textContent = rx + ' / ' + tx;
+
+    // 置信度
+    const conf = document.getElementById('confidence');
+    conf.textContent = data.confidence || 'low';
+    conf.className = 'confidence ' + (data.confidence || 'low');
+
+    // 断开次数
+    document.getElementById('discCount').textContent = data.disconnect_events || 0;
+
+    // 爱快WAN状态
+    renderIkuaiWan(data.ikuai_wan, data.combined);
+}
+
+function renderIkuaiWan(ikuaiWan, combined) {
+    const bar = document.getElementById('ikuaiBar');
+    const list = document.getElementById('ikuaiWanList');
+    if (!ikuaiWan || ikuaiWan.error) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    const wanList = ikuaiWan.wan_list || [];
+    if (wanList.length === 0) {
+        list.innerHTML = '<span style="color:var(--text2);">无WAN口数据</span>';
+        return;
+    }
+    list.innerHTML = wanList.map(w => {
+        const online = w.pppoe_status === 2 || w.internet === 2;
+        const dotColor = online ? 'var(--green)' : 'var(--red)';
+        const ip = w.ip_addr ? ` (${w.ip_addr})` : '';
+        return `<div class="wan-item">
+            <span class="online-dot" style="background:${dotColor};"></span>
+            <span class="wan-name">${w.name}:</span>
+            <span>${online ? '在线' : '离线'}</span>
+            ${ip}
+        </div>`;
+    }).join('');
+}
+
+// ─── 监控目标状态面板 ─────────────────────────────────────
+function renderMonitorStatus(data) {
+    if (!data) return;
+    var panel = document.getElementById('targetPanel');
+    panel.style.display = 'grid';
+
+    // 内网设备
+    var lanHtml = (data.lan || []).map(function(h) {
+        var dot = h.status === 'ok' ? 'ok' : (h.status === 'fail' ? 'fail' : 'unknown');
+        var rttStr = h.rtt && h.rtt !== '?' ? h.rtt + 'ms' : '';
+        return '<div class="target-item">' +
+            '<span class="t-dot ' + dot + '"></span>' +
+            '<span class="t-name" title="' + esc(h.ip) + '">' + esc(h.name) + '</span>' +
+            '<span class="t-info">' + (rttStr || esc(h.ip)) + '</span>' +
+        '</div>';
+    }).join('');
+    document.getElementById('lanGrid').innerHTML = lanHtml || '<span style="font-size:11px;color:var(--text2);">暂无内网设备</span>';
+
+    // 外网检测 (Ping 目标 + HTTP)
+    var wan = data.wan || {};
+    var wanItems = [];
+    (wan.v4_targets || []).forEach(function(ip) { wanItems.push({name: 'IPv4', ip: ip, icon: '④'}); });
+    (wan.v6_targets || []).forEach(function(ip) { wanItems.push({name: 'IPv6', ip: ip, icon: '⑥'}); });
+    (wan.http_targets || []).forEach(function(url) {
+        var short = url.replace(/^https?:\/\//, '').replace(/\/.*/, '');
+        wanItems.push({name: 'HTTP', ip: short, icon: '🔗'});
+    });
+    var wanHtml = wanItems.map(function(w) {
+        return '<div class="target-item">' +
+            '<span style="font-size:12px;flex-shrink:0">' + (w.icon||'•') + '</span>' +
+            '<span class="t-name" style="font-size:10px;color:var(--text2)">' + esc(w.name) + '</span>' +
+            '<span class="t-info">' + esc(w.ip) + '</span>' +
+        '</div>';
+    }).join('');
+    document.getElementById('wanGrid').innerHTML = wanHtml || '<span style="font-size:11px;color:var(--text2);">暂无外网目标</span>';
+
+    // DNS + 域名
+    var dnsAll = (data.dns || []).concat(data.domains || []);
+    var dnsHtml = dnsAll.map(function(d) {
+        var dot = d.status === 'ok' ? 'ok' : (d.status === 'fail' || d.status === 'dns_fail' ? 'fail' : 'unknown');
+        return '<div class="target-item">' +
+            '<span class="t-dot ' + dot + '"></span>' +
+            '<span class="t-name" title="' + esc(d.name) + '">' + esc(d.name) + '</span>' +
+            '<span class="t-info">' + (d.rate ? d.rate + '%' : '') + (d.rtt && d.rtt !== '?' ? ' ' + d.rtt + 'ms' : '') + '</span>' +
+        '</div>';
+    }).join('');
+    document.getElementById('dnsGrid').innerHTML = dnsHtml || '<span style="font-size:11px;color:var(--text2);">暂无数据</span>';
+}
+
+// ─── 图表渲染 ───────────────────────────────────────
+// Canvas 渐变辅助
+function createGradient(ctx, color) {
+    var g = ctx.createLinearGradient(0, 0, 0, 180);
+    g.addColorStop(0, color + '44');
+    g.addColorStop(0.6, color + '11');
+    g.addColorStop(1, color + '00');
+    return g;
+}
+
+function initCharts() {
+    Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+    // ── 1. 延迟趋势 (渐变色面积折线图) ──
+    var ctx1 = document.getElementById('rttChart').getContext('2d');
+    var gwGrad = createGradient(ctx1, '#58a6ff');
+    var v4Grad = createGradient(ctx1, '#3fb950');
+    var v6Grad = createGradient(ctx1, '#d29922');
+
+    rttChart = new Chart(ctx1, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                { label: '网关', data: [], borderColor: '#58a6ff',
+                  backgroundColor: gwGrad, borderWidth: 1.8, pointRadius: 0,
+                  pointHoverRadius: 5, pointHoverBackgroundColor: '#58a6ff',
+                  tension: 0.35, fill: true },
+                { label: 'IPv4', data: [], borderColor: '#3fb950',
+                  backgroundColor: v4Grad, borderWidth: 1.8, pointRadius: 0,
+                  pointHoverRadius: 5, pointHoverBackgroundColor: '#3fb950',
+                  tension: 0.35, fill: true },
+                { label: 'IPv6', data: [], borderColor: '#d29922',
+                  backgroundColor: v6Grad, borderWidth: 1.8, pointRadius: 0,
+                  pointHoverRadius: 5, pointHoverBackgroundColor: '#d29922',
+                  tension: 0.35, fill: true },
+            ],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: { duration: 500, easing: 'easeOutQuart' },
+            interaction: { intersect: false, mode: 'index' },
+            plugins: {
+                legend: { position: 'top', align: 'end',
+                    labels: { color: CHART_COLORS.text, font: { size: 10 }, usePointStyle: true,
+                              pointStyleWidth: 8, padding: 16, boxWidth: 6 } },
+                tooltip: {
+                    backgroundColor: 'rgba(22,27,34,.95)', borderColor: CHART_COLORS.border || '#58a6ff44',
+                    borderWidth: 1, titleFont: { size: 11 }, bodyFont: { size: 10 },
+                    callbacks: { label: function(c) { return ' ' + c.dataset.label + ': ' + (c.parsed.y != null ? c.parsed.y + ' ms' : '—'); } }
+                }
+            },
+            scales: {
+                x: { ticks: { color: CHART_COLORS.text, font: { size: 9 }, maxRotation: 0,
+                      maxTicksLimit: 12, autoSkip: true },
+                     grid: { color: CHART_COLORS.grid, drawBorder: false } },
+                y: { beginAtZero: true, title: { display: true, text: 'ms', color: CHART_COLORS.text, font: { size: 10 } },
+                     ticks: { color: CHART_COLORS.text, font: { size: 9 } },
+                     grid: { color: CHART_COLORS.grid, drawBorder: false } },
+            },
+        },
+    });
+
+    // ── 2. 在线率 (圆环图 + 中心文字) ──
+    var ctx2 = document.getElementById('uptimeChart').getContext('2d');
+    uptimeChart = new Chart(ctx2, {
+        type: 'doughnut',
+        data: {
+            labels: ['网关', 'IPv4', 'IPv6', '丢包'],
+            datasets: [{
+                data: [0, 0, 0, 1],
+                backgroundColor: ['#58a6ffdd', '#3fb950dd', '#d29922dd', '#f8514933'],
+                borderColor: ['#58a6ff', '#3fb950', '#d29922', '#f85149'],
+                borderWidth: 1.5,
+                hoverBorderWidth: 2,
+                hoverBorderColor: '#fff',
+            }],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: { duration: 600, easing: 'easeOutQuart' },
+            cutout: '62%',
+            plugins: {
+                legend: { position: 'bottom',
+                    labels: { color: CHART_COLORS.text, font: { size: 10 }, usePointStyle: true,
+                              pointStyleWidth: 6, padding: 12 } },
+                tooltip: {
+                    backgroundColor: 'rgba(22,27,34,.95)', borderColor: '#58a6ff44', borderWidth: 1,
+                    callbacks: { label: function(c) { return ' ' + c.label + ': ' + c.parsed + '%'; } }
+                }
+            },
+        },
+    });
+
+    // ── 3. 延迟分布 (分组柱状图 + 圆角) ──
+    var ctx3 = document.getElementById('histChart').getContext('2d');
+    histChart = new Chart(ctx3, {
+        type: 'bar',
+        data: {
+            labels: ['0-1ms', '1-2ms', '2-5ms', '5-10ms', '10-20ms', '20ms+'],
+            datasets: [
+                { label: '网关', data: [], backgroundColor: '#58a6ffcc', borderColor: '#58a6ff',
+                  borderWidth: 1, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: false,
+                  maxBarThickness: 32 },
+                { label: 'IPv4', data: [], backgroundColor: '#3fb950cc', borderColor: '#3fb950',
+                  borderWidth: 1, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: false,
+                  maxBarThickness: 32 },
+                { label: 'IPv6', data: [], backgroundColor: '#d29922cc', borderColor: '#d29922',
+                  borderWidth: 1, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: false,
+                  maxBarThickness: 32 },
+            ],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: { duration: 500, easing: 'easeOutQuart' },
+            plugins: {
+                legend: { position: 'bottom',
+                    labels: { color: CHART_COLORS.text, font: { size: 10 }, usePointStyle: true,
+                              pointStyle: 'rectRounded', pointStyleWidth: 8, padding: 12 } },
+                tooltip: {
+                    backgroundColor: 'rgba(22,27,34,.95)', borderColor: '#58a6ff44', borderWidth: 1,
+                    titleFont: { size: 11 }, bodyFont: { size: 10 },
+                }
+            },
+            scales: {
+                x: { ticks: { color: CHART_COLORS.text, font: { size: 9 } },
+                     grid: { display: false, drawBorder: false } },
+                y: { title: { display: true, text: '采样次数', color: CHART_COLORS.text, font: { size: 10 } },
+                     ticks: { color: CHART_COLORS.text, font: { size: 9 } },
+                     grid: { color: CHART_COLORS.grid, drawBorder: false } },
+            },
+        },
+    });
+
+    restoreSegBtns();
+}
+
+function restoreSegBtns() {
+    document.querySelectorAll('.seg-btn').forEach(function(btn) {
+        var key = btn.dataset.key, val = btn.dataset.val;
+        if (key && dashCfg[key] === val) {
+            btn.classList.add('active');
+        } else if (key) {
+            btn.classList.remove('active');
+        }
+    });
+}
+
+function setTrendParam(key, val, btn) {
+    dashCfg[key] = val;
+    saveDashCfg();
+    // 更新按钮状态
+    document.querySelectorAll('.seg-btn[data-key="' + key + '"]').forEach(function(b) {
+        b.classList.remove('active');
+    });
+    if (btn) btn.classList.add('active');
+    // 重新加载图表
+    clearCharts();
+}
+
+function updateCharts(data) {
+    if (!data) return;
+    const now = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
+
+    // 1. 延迟趋势
+    const ph = data.ping_history || {};
+    if (ph.labels && ph.labels.length > 0) {
+        rttChart.data.labels = ph.labels;
+        rttChart.data.datasets[0].data = ph.gw_rtt || [];
+        rttChart.data.datasets[1].data = ph.v4_rtt || [];
+        rttChart.data.datasets[2].data = ph.v6_rtt || [];
+        rttChart.update('none');
+        var d = dashCfg.rttDays || '1', b = dashCfg.rttBucket || '5';
+        var label = d=='0.04'?'1h':d=='0.25'?'6h':d=='3'?'3天':d=='7'?'7天':'24h';
+        document.getElementById('chart1Range').textContent =
+            label + ' · ' + b + '分钟聚合 · ' + ph.labels.length + '点 · ' + now;
+    }
+
+    // 2. 在线率饼图 (gw/v4/v6)
+    const pie = data.uptime_pie || {};
+    if (pie.data && pie.data.length) {
+        var gwUp = pie.data[0] || 0, v4Up = pie.data[1] || 0, v6Up = pie.data[2] || 0;
+        var totalLoss = Math.max(0, 100 - ((gwUp + v4Up + v6Up) / 3));
+        uptimeChart.data.datasets[0].data = [gwUp, v4Up, v6Up, Math.max(0.1, totalLoss)];
+        uptimeChart.update('none');
+        document.getElementById('chart2Detail').textContent =
+            '网关 ' + gwUp + '% | IPv4 ' + v4Up + '% | IPv6 ' + v6Up + '% | 共 ' + (pie.total_pings || '?') + '次Ping';
+    }
+
+    // 3. 延迟分布 — 按协议自适应柱状图类型
+    const hist = data.rtt_histogram || {};
+    if (hist.labels) {
+        histChart.data.labels = hist.labels;
+        var ds = hist.datasets || {};
+        var proto = dashCfg.histProto || 'all';
+        var mode = dashCfg.histMode || 'stacked';
+        var isStacked = (mode === 'stacked');
+        // 模式切换: 堆叠 → 看总量分布; 分组 → 横向对比
+        histChart.options.scales.x.stacked = isStacked;
+        histChart.options.scales.y.stacked = isStacked;
+        histChart.data.datasets[0].data = (ds.gw || []).slice();
+        histChart.data.datasets[1].data = (ds.v4 || []).slice();
+        histChart.data.datasets[2].data = (ds.v6 || []).slice();
+        if (proto === 'all') {
+            histChart.data.datasets[0].label = '网关';
+            histChart.data.datasets[1].label = 'IPv4';
+            histChart.data.datasets[2].label = 'IPv6';
+        } else {
+            var sel = proto === 'gw' ? 0 : (proto === 'v4' ? 1 : 2);
+            histChart.data.datasets.forEach(function(d, i) { if (i !== sel) d.data = []; });
+            histChart.data.datasets[0].label = proto === 'gw' ? '网关' : '';
+            histChart.data.datasets[1].label = proto === 'v4' ? 'IPv4' : '';
+            histChart.data.datasets[2].label = proto === 'v6' ? 'IPv6' : '';
+        }
+        histChart.update('none');
+        var totalCount = 0;
+        (ds.gw || []).concat(ds.v4||[], ds.v6||[]).forEach(function(n){ totalCount += n; });
+        document.getElementById('chart3Detail').textContent =
+            '共 ' + totalCount + ' 次采样 · ' + now;
+        document.getElementById('histModeHint').textContent =
+            isStacked ? '(堆叠)' : '(分组)';
+    }
+}
+
+// ─── 事件 + 日志 ───────────────────────────────────────
+function renderEvents(events, filterType) {
+    allEvents = events;
+    const body = document.getElementById('eventsBody');
+    if (!events || events.length === 0) {
+        if (filterType === 'disconnect') {
+            body.innerHTML = '<div class="empty-msg" style="color:var(--green);">✅ 暂无断网事件 — 网络状态良好</div>';
+        } else if (filterType === 'recover') {
+            body.innerHTML = '<div class="empty-msg" style="color:var(--green);">✅ 暂无恢复事件 — 无需恢复操作</div>';
+        } else {
+            body.innerHTML = '<div class="empty-msg">暂无事件</div>';
+        }
+        return;
+    }
+    const html = events.slice(-100).reverse().map(ev => {
+        const cls = (ev.event_type || '').replace(/_/g, '-');
+        const icon = (ev.event_type || '').includes('recover') ? '✅' :
+                     (ev.event_type || '').includes('disconnect') ? '🔴' :
+                     (ev.event_type || '').includes('link') ? '🔗' : 'ℹ️';
+        return `<div class="event-entry ev-${cls}">
+            <span class="ev-icon">${icon}</span>
+            <span class="ev-ts">${ev.ts || ''}</span>
+            <span class="ev-msg">${ev.msg || ''}</span>
+        </div>`;
+    }).join('');
+    body.innerHTML = html;
+}
+
+function renderLogs(logs, filterLevel) {
+    allLogs = logs;
+    const body = document.getElementById('logsBody');
+    if (!logs || logs.length === 0) {
+        if (filterLevel === 'WARN') {
+            body.innerHTML = '<div class="empty-msg" style="color:var(--green);">✅ 暂无 WARN 日志 — 运行正常</div>';
+        } else if (filterLevel === 'ERROR') {
+            body.innerHTML = '<div class="empty-msg" style="color:var(--green);">✅ 暂无 ERROR 日志 — 运行正常</div>';
+        } else {
+            body.innerHTML = '<div class="empty-msg">暂无日志</div>';
+        }
+        return;
+    }
+    const html = logs.slice(-200).reverse().map(l => {
+        return `<div class="log-entry">
+            <span class="ts">${(l.ts || '').split('.')[0]}</span>
+            <span class="level ${l.level || 'INFO'}">${l.level || 'INFO'}</span>
+            <span class="msg">${l.msg || ''}</span>
+        </div>`;
+    }).join('');
+    body.innerHTML = html;
+}
+
+function filterEvents(type, btn) {
+    document.querySelectorAll('.panel:nth-child(1) .filters button').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    // 使用服务端筛选，确保不遗漏历史事件
+    fetchEvents(type === 'all' ? null : type).then(function(events) {
+        allEvents = events;
+        renderEvents(events, type === 'all' ? null : type);
+    });
+}
+
+function filterLogs(level, btn) {
+    document.querySelectorAll('.panel:nth-child(2) .filters button').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    fetchLogs(level === 'all' ? null : level).then(function(logs) {
+        allLogs = logs;
+        renderLogs(logs, level === 'all' ? null : level);
+    });
+}
+
+// ─── 控制操作 ───────────────────────────────────────
+async function restartMonitor() {
+    if (!confirm('确定要重启监控服务吗？')) return;
+    const r = await fetch('/api/control?action=restart');
+    const d = await r.json();
+    alert(d.message || '操作完成');
+}
+
+function clearCharts() {
+    fetchChartData().then(updateCharts);
+}
+
+// ─── 主循环 ───────────────────────────────────────
+async function mainLoop() {
+    const data = await fetchStatus();
+    renderStatus(data);
+
+    // 每60秒刷新图表
+    const now = Date.now();
+    if (!window._lastChartRefresh || now - window._lastChartRefresh > 60000) {
+        const chartData = await fetchChartData();
+        updateCharts(chartData);
+        window._lastChartRefresh = now;
+    }
+
+    // 每30秒刷新事件/日志/监控目标
+    if (!window._lastEventRefresh || now - window._lastEventRefresh > 30000) {
+        fetchEvents().then(renderEvents);
+        fetchLogs().then(renderLogs);
+        fetchMonitorStatus().then(renderMonitorStatus);
+        window._lastEventRefresh = now;
+    }
+
+    // 在线指示器
+    const dot = document.getElementById('liveDot');
+    dot.className = 'pulse-dot' + (data && data.monitor_running ? '' : ' off');
+}
+
+// 圆环图中心文字插件
+var doughnutCenter = {
+    id: 'doughnutCenter',
+    afterDraw: function(chart) {
+        if (chart !== uptimeChart) return;
+        var ctx = chart.ctx, width = chart.width, height = chart.height;
+        var x = width / 2, y = height / 2 - 4;
+        var data = chart.data.datasets[0].data;
+        if (!data || !data.length) return;
+        var avg = Math.round((data[0] + data[1] + data[2]) / 3);
+        ctx.save();
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.font = 'bold 22px sans-serif';
+        ctx.fillStyle = avg >= 95 ? '#3fb950' : (avg >= 80 ? '#d29922' : '#f85149');
+        ctx.fillText(avg + '%', x, y - 6);
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = '#8b949e';
+        ctx.fillText('综合在线率', x, y + 18);
+        ctx.restore();
+    }
+};
+Chart.register(doughnutCenter);
+
+// 启动
+initCharts();
+mainLoop();
+setInterval(mainLoop, 5000);
+fetchMonitorStatus().then(renderMonitorStatus);
+
+// 首次数据加载后淡出加载动画
+Promise.all([fetchChartData(), fetchEvents(), fetchMonitorStatus()]).then(function() {
+    var overlay = document.getElementById('loaderOverlay');
+    if (overlay) overlay.classList.add('hide');
+});
+
+// 弹性数字时钟
+(function() {
+    var cols = document.querySelectorAll('#bounceClock .digit-col');
+    var digits = [];
+    var prev = '------';
+
+    cols.forEach(function(col) {
+        var s = col.querySelector('.digit');
+        if (!s) {
+            s = document.createElement('span');
+            s.className = 'digit';
+            col.appendChild(s);
+        }
+        s.style.display = 'block';
+        digits.push(s);
+    });
+
+    function tick() {
+        var now = new Date();
+        var str = String(now.getHours()).padStart(2, '0') +
+                  String(now.getMinutes()).padStart(2, '0') +
+                  String(now.getSeconds()).padStart(2, '0');
+        for (var i = 0; i < 6; i++) {
+            var ch = str.charAt(i);
+            var el = digits[i];
+            el.textContent = ch;
+            if (ch !== prev.charAt(i) && prev.charAt(i) !== '-') {
+                el.style.transition = 'none';
+                el.style.transform = 'translateY(-6px)';
+                el.style.opacity = '0.3';
+                requestAnimationFrame(function(el, ch) {
+                    return function() {
+                        el.style.transition = 'transform .15s cubic-bezier(0.34,1.56,0.64,1), opacity .15s ease';
+                        el.style.transform = 'translateY(0)';
+                        el.style.opacity = '1';
+                    };
+                }(el, ch));
+            }
+        }
+        prev = str;
+    }
+
+    // 初始填入
+    tick();
+    setInterval(tick, 1000);
+})();
+
+// 页面运行时长
+var _start = Date.now();
+setInterval(function() {
+    var sec = Math.floor((Date.now() - _start) / 1000);
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    document.getElementById('webUptime').textContent = (h>0 ? h+'h ' : '') + m + 'm ' + s + 's';
+}, 1000);
+</script>
+
+<!-- 悬浮音乐播放器 xf-MusicPlayer -->
+<div id="xf-MusicPlayer" data-musicApi="192.168.31.251:9091/api/music" data-themeColor="xf-sky" data-memory="1" data-bottomHeight="80px"></div>
+
+<script>
+// 先加载配置，再初始化播放器（确保配置生效）
+var xhr = new XMLHttpRequest();
+xhr.open('GET', '/api/music/config', false); // 同步请求
+try { xhr.send(); var c = JSON.parse(xhr.responseText); } catch(e) { var c = {}; }
+var p = document.getElementById('xf-MusicPlayer');
+if (c.playlist_id) {
+    p.setAttribute('data-songList', c.playlist_id);
+} else if (c.song_chart) {
+    p.setAttribute('data-songChart', c.song_chart);
+}
+</script>
+<script src="xf-MusicPlayer/js/xf-MusicPlayer.min.js"></script>
+
+</body>
+</html>

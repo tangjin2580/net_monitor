@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""生成新的 ikuai.html 监控页面（正确解析新 API 格式）"""
+import json
+
+new_html = r'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>爱快路由器监控</title>
+<style>
+:root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
+    --border: #30363d; --text: #e6edf3; --text2: #8b949e;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --orange: #f0883e;
+    --green-bg: rgba(63,185,80,.12); --red-bg: rgba(248,81,73,.12);
+    --radius: 8px; --mono: 'JetBrains Mono', monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+       background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.topbar { display: flex; align-items: center; justify-content: space-between;
+           padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 8px; }
+.topbar h1 { font-size: 16px; font-weight: 600; }
+.topbar .actions { display: flex; gap: 8px; }
+.topbar button { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+                  padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 12px; }
+.topbar button:hover { border-color: var(--blue); }
+
+.container { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+
+.status-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+       padding: 16px; position: relative; }
+.card .label { font-size: 11px; text-transform: uppercase; color: var(--text2); letter-spacing: .5px; margin-bottom: 6px; }
+.card .value { font-size: 26px; font-weight: 700; font-family: var(--mono); }
+.card .sub { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.card.online { border-left: 3px solid var(--green); }
+.card.offline { border-left: 3px solid var(--red); }
+
+.green-text { color: var(--green); }
+.red-text { color: var(--red); }
+.yellow-text { color: var(--yellow); }
+
+.section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+           padding: 16px; margin-bottom: 16px; }
+.section h2 { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text2); }
+
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; padding: 8px 12px; color: var(--text2); font-weight: 600; border-bottom: 1px solid var(--border); }
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+tr:hover { background: var(--surface2); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.badge-up { background: var(--green-bg); color: var(--green); }
+.badge-down { background: var(--red-bg); color: var(--red); }
+
+#loading { padding: 40px; text-align: center; color: var(--text2); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+    <h1>📡 爱快路由器监控</h1>
+    <div class="actions">
+        <button onclick="loadAll()">🔄 刷新</button>
+        <button onclick="location.href='/'">← 返回仪表盘</button>
+    </div>
+</div>
+
+<div class="container">
+    <div class="status-row" id="status-row">
+        <div class="card" id="card-online">
+            <div class="label">路由器状态</div>
+            <div class="value" id="router-status">检测中...</div>
+        </div>
+        <div class="card">
+            <div class="label">WAN1 IP</div>
+            <div class="value" id="wan-ip">?</div>
+        </div>
+        <div class="card">
+            <div class="label">LAN1 IP</div>
+            <div class="value" id="lan-ip">?</div>
+        </div>
+        <div class="card">
+            <div class="label">总上传速度</div>
+            <div class="value" id="total-up">?</div>
+        </div>
+        <div class="card">
+            <div class="label">总下载速度</div>
+            <div class="value" id="total-down">?</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📊 接口实时流量</h2>
+        <table>
+            <thead><tr>
+                <th>接口</th><th>IP 地址</th><th>状态</th><th>连接数</th>
+                <th>上传速度</th><th>下载速度</th><th>总上传</th><th>总下载</th>
+            </tr></thead>
+            <tbody id="iface-tbody"></tbody>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>🌐 WAN 口配置</h2>
+        <table>
+            <thead><tr>
+                <th>名称</th><th>IP 地址</th><th>网关</th><th>DNS</th><th>状态</th>
+            </tr></thead>
+            <tbody id="wan-tbody"></tbody>
+        </table>
+    </div>
+
+    <div id="loading">⏳ 加载中...</div>
+</div>
+
+<script>
+function fmtSpeed(bps) {
+    if (!bps && bps !== 0) return '--';
+    if (bps < 1024) return bps + ' bps';
+    if (bps < 1024*1024) return (bps/1024).toFixed(1) + ' kbps';
+    return (bps/1024/1024).toFixed(2) + ' Mbps';
+}
+function fmtBytes(b) {
+    if (!b && b !== 0) return '--';
+    if (b < 1024) return b + ' B';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+    if (b < 1024*1024*1024) return (b/1024/1024).toFixed(2) + ' MB';
+    return (b/1024/1024/1024).toFixed(2) + ' GB';
+}
+
+async function apiFetch(url, opts={}) {
+    const r = await fetch(url, opts);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+}
+
+async function loadAll() {
+    const loading = document.getElementById('loading');
+    loading.style.display = 'block';
+
+    try {
+        const ov = await apiFetch('/api/ikuai');
+        loading.style.display = 'none';
+
+        // 路由器在线状态
+        const st = document.getElementById('router-status');
+        const card = document.getElementById('card-online');
+        if (ov.online) {
+            st.textContent = '在线';
+            st.className = 'value green-text';
+            card.classList.add('online');
+        } else {
+            st.textContent = '离线';
+            st.className = 'value red-text';
+            card.classList.add('offline');
+            return;
+        }
+
+        // ── 接口流量（monitor_iface → results.iface_stream）──
+        const ifaceData = (ov.monitor_iface && ov.monitor_iface.iface_stream) || [];
+        let totalUp = 0, totalDown = 0;
+        let ifaceRows = '';
+        ifaceData.forEach(i => {
+            totalUp += i.upload || 0;
+            totalDown += i.download || 0;
+            const isUp = i.connect_num !== '--' && i.connect_num !== '0' && i.upload > 0;
+            ifaceRows += `<tr>
+                <td>${i.interface || '--'}</td>
+                <td>${i.ip_addr || '--'}</td>
+                <td><span class="badge ${isUp ? 'badge-up' : 'badge-down'}">${isUp ? 'UP' : 'DOWN'}</span></td>
+                <td>${i.connect_num || '--'}</td>
+                <td>${fmtSpeed(i.upload)}</td>
+                <td>${fmtSpeed(i.download)}</td>
+                <td>${fmtBytes(i.total_up)}</td>
+                <td>${fmtBytes(i.total_down)}</td>
+            </tr>`;
+        });
+        document.getElementById('iface-tbody').innerHTML = ifaceRows;
+        document.getElementById('total-up').textContent = fmtSpeed(totalUp);
+        document.getElementById('total-down').textContent = fmtSpeed(totalDown);
+
+        // ── WAN 口（wan → results.data）──
+        const wanData = (ov.wan && ov.wan.data) || [];
+        let wanRows = '';
+        wanData.forEach(w => {
+            document.getElementById('wan-ip').textContent = w.pppoe_ip_addr || w.ip_addr || '--';
+            wanRows += `<tr>
+                <td>${w.comment || w.name || '--'}</td>
+                <td>${w.pppoe_ip_addr || w.ip_addr || '--'}</td>
+                <td>${w.pppoe_gateway || '--'}</td>
+                <td>${w.pppoe_dns1 || '--'}</td>
+                <td><span class="badge badge-up">UP</span></td>
+            </tr>`;
+        });
+        document.getElementById('wan-tbody').innerHTML = wanRows || '<tr><td colspan="5" style="color:var(--text2)">暂无 WAN 数据</td></tr>';
+
+        // ── LAN 口（lan → results.data）──
+        const lanData = (ov.lan && ov.lan.data) || [];
+        if (lanData.length > 0) {
+            document.getElementById('lan-ip').textContent = lanData[0].ip_addr || '--';
+        }
+
+    } catch(e) {
+        loading.style.display = 'none';
+        console.error('加载失败:', e);
+        document.getElementById('router-status').textContent = '错误';
+        document.getElementById('router-status').className = 'value red-text';
+    }
+}
+
+loadAll();
+setInterval(loadAll, 10000);
+</script>
+</body>
+</html>'''
+
+print(f"新 IKUAI_HTML 长度: {len(new_html)} 字符")
+print("请手动替换 net_monitor_web.py 中的 IKUAI_HTML 变量")
+# 保存到文件供参考
+with open(r"G:\code\net_monitor\ikuai_new.html", "w", encoding="utf-8") as f:
+    f.write(new_html)
+print(f"✅ 已保存到 G:\code\net_monitor\ikuai_new.html")
+print("在 net_monitor_web.py 中搜索 IKUAI_HTML = 并替换整个值")

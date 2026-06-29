@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>音乐配置 — 网络监控</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+    --body-font: "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --bg: #090a0f; --surface: rgba(22,27,42,.35); --surface2: rgba(30,36,56,.25);
+    --border: rgba(113,119,144,.2); --text: #f1f5f9; --text2: rgba(148,163,184,.85);
+    --blue: #60a5fa; --green: #4ade80; --red: #f87171; --radius: 12px;
+}
+* { margin:0; padding:0; box-sizing: border-box; }
+body { font-family: var(--body-font); font-weight: 400; -webkit-font-smoothing: antialiased;
+    background: #090a0f; color: var(--text); min-height: 100vh; }
+.topbar { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.topbar h1 { font-size: 15px; font-weight: 600; display:flex; align-items:center; gap:8px; }
+.topbar .actions { display: flex; gap: 8px; }
+.topbar a { color: var(--text2); text-decoration: none; font-size: 12px;
+    padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--radius); }
+.topbar a:hover { border-color: var(--blue); color: var(--text); }
+.container { max-width: 640px; margin: 40px auto; padding: 0 20px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.card h2 { font-size: 14px; color: var(--text2); margin-bottom: 20px; display:flex; align-items:center; gap:8px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 11px; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
+.form-group input { width: 100%; padding: 10px 14px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 14px; font-family: var(--body-font); }
+.form-group input:focus { outline: none; border-color: var(--blue); }
+.form-group .hint { font-size: 10px; color: var(--text2); margin-top: 4px; }
+.btn-row { display: flex; gap: 10px; margin-top: 20px; }
+.btn { padding: 10px 24px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13px; font-family: var(--body-font); }
+.btn:hover { border-color: var(--blue); }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #000; font-weight: 600; }
+.btn.primary:hover { opacity: .85; }
+.btn.danger { border-color: var(--red); color: var(--red); }
+.btn.danger:hover { background: rgba(248,113,113,.1); }
+.result { margin-top: 12px; padding: 10px 14px; border-radius: 8px; font-size: 12px; display: none; }
+.result.ok { display: block; background: rgba(74,222,128,.12); color: var(--green); border: 1px solid rgba(74,222,128,.25); }
+.result.err { display: block; background: rgba(248,113,113,.12); color: var(--red); border: 1px solid rgba(248,113,113,.25); }
+.current { margin-top: 16px; padding: 12px; background: var(--surface2); border-radius: 8px; font-size: 12px; }
+.current .val { font-size: 18px; font-weight: 700; color: var(--blue); font-family: monospace; }
+</style>
+</head>
+<body>
+<div class="topbar">
+    <h1>🎵 音乐配置</h1>
+    <div class="actions">
+        <a href="/dashboard.html">← 仪表盘</a>
+        <a href="/admin.html">🔧 管理</a>
+    </div>
+</div>
+
+<div class="container">
+    <div class="card">
+        <h2>📋 网易云歌单ID</h2>
+        <div class="current">
+            当前歌单ID: <span class="val" id="currentId">加载中...</span>
+            <span style="color:var(--text2);font-size:10px;margin-left:8px" id="currentChart"></span>
+        </div>
+
+        <div class="form-group" style="margin-top:16px">
+            <label>歌单ID</label>
+            <input type="text" id="playlistId" placeholder="例如: 2192163086">
+            <div class="hint">从网易云音乐歌单URL中获取，如 /playlist?id=<b>2192163086</b></div>
+        </div>
+
+        <div class="form-group">
+            <label>或选择官方歌榜</label>
+            <input type="text" id="songChart" placeholder="热歌榜 / 新歌榜 / 飙升榜 / 原创榜">
+            <div class="hint">留空使用歌单ID，填写则使用官方歌榜（优先歌单ID）</div>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn primary" onclick="saveConfig()">💾 保存</button>
+            <button class="btn danger" onclick="resetConfig()">🔄 恢复默认</button>
+        </div>
+        <div class="result" id="result"></div>
+    </div>
+</div>
+
+<script>
+async function loadConfig() {
+    try {
+        var r = await fetch('/api/music/config');
+        var d = await r.json();
+        document.getElementById('currentId').textContent = d.playlist_id || '热歌榜(默认)';
+        document.getElementById('currentChart').textContent = d.song_chart ? '(' + d.song_chart + ')' : '';
+        document.getElementById('playlistId').value = d.playlist_id || '';
+        document.getElementById('songChart').value = d.song_chart || '';
+    } catch(e) {
+        document.getElementById('currentId').textContent = '加载失败';
+    }
+}
+
+async function saveConfig() {
+    var pid = document.getElementById('playlistId').value.trim();
+    var chart = document.getElementById('songChart').value.trim();
+    var r = document.getElementById('result');
+    try {
+        var res = await fetch('/api/music/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({playlist_id: pid, song_chart: chart})
+        });
+        var d = await res.json();
+        if (d.ok) {
+            r.className = 'result ok'; r.textContent = '✅ 已保存! 刷新仪表盘生效。';
+            loadConfig();
+        } else {
+            r.className = 'result err'; r.textContent = '❌ ' + (d.error || '保存失败');
+        }
+    } catch(e) {
+        r.className = 'result err'; r.textContent = '❌ ' + e.message;
+    }
+}
+
+async function resetConfig() {
+    if (!confirm('确定恢复默认歌单（热歌榜）？')) return;
+    document.getElementById('playlistId').value = '';
+    document.getElementById('songChart').value = '';
+    await saveConfig();
+}
+
+loadConfig();
+</script>
+</body>
+</html>

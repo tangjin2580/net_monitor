@@ -1,0 +1,22 @@
+[Unit]
+Description=Network Monitor - Subnet Diagnostics
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=li
+Group=li
+ExecStart=/bin/bash /home/li/net_monitor.sh
+Restart=on-failure
+RestartSec=10
+PIDFile=/home/li/net_monitor.pid
+WorkingDirectory=/home/li
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=net_monitor
+
+[Install]
+WantedBy=multi-user.target
