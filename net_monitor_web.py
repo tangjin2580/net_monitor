@@ -31,7 +31,6 @@ from config import (
     log_lines, parsed_events, stats, init_logging,
 )
 
-logger = logging.getLogger("net_monitor_web")
 from log_parser import process_line, log_watcher
 from system_stats import system_stats_collector
 from history_recorder import history_recorder
@@ -47,6 +46,10 @@ from traceroute_parser import *               # noqa: F401,F403
 from web_handler import (                     # noqa: F401
     parse_ping_history, get_combined_status,
 )
+
+# 注意: 必须放在 `from xxx import *` 兼容 shim 之后, 否则会被其它模块的
+# 同名 `logger` 通配导入覆盖, 导致本模块的日志前缀变成别的模块名。
+logger = logging.getLogger("net_monitor_web")
 
 
 # ─── 主入口 ──────────────────────────────────────────────────────────

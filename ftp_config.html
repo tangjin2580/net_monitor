@@ -7,7 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Cpath d='M16 40h32v8H16z' fill='none' stroke='%2358a6ff' stroke-width='2.5'/%3E%3Ccircle cx='24' cy='44' r='2' fill='%233fb950'/%3E%3Ccircle cx='40' cy='44' r='2' fill='%233fb950'/%3E%3Cpath d='M20 40V28a12 12 0 0124 0v12' fill='none' stroke='%2358a6ff' stroke-width='2.5'/%3E%3C/svg%3E">
 <style>
 :root {
-    --bg: #0a0c15; --surface: rgba(22,27,42,.7); --surface2: rgba(30,36,56,.55);
+    --bg: #0a0c15; --surface: rgba(18,22,34,.35); --surface2: rgba(22,28,46,.25);
     --border: rgba(113,119,144,.2); --text: #e6edf3; --text2: #8b949e;
     --green: #4ade80; --red: #f87171; --yellow: #facc15; --blue: #60a5fa;
     --green-bg: rgba(63,185,80,.12); --red-bg: rgba(248,81,73,.12);
@@ -91,13 +91,15 @@ button:disabled { opacity:.4; cursor:wait; }
 
 .last-upload { font-size:11px; color:var(--text2); margin-top:12px; text-align:center; }
   .topbar,.section,.card,.container .card,.status-card { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-  body { font-family: "Poppins", sans-serif; -webkit-font-smoothing: antialiased; background: #0a0c15; background-image: radial-gradient(ellipse 100% 50% at 50% -30%, rgba(96,165,250,.12) 0%, transparent 50%), radial-gradient(ellipse 60% 30% at 90% 100%, rgba(74,222,128,.06) 0%, transparent 50%); background-attachment: fixed; color: var(--text); }
+  body { font-family: "Poppins", sans-serif; -webkit-font-smoothing: antialiased; background: #090a0f; background-image: linear-gradient(160deg, #1a1040 0%, #2d1b69 25%, #1e3a5f 50%, #0f2027 75%, #1a1040 100%), radial-gradient(ellipse 70% 50% at 30% 10%, rgba(96,165,250,.25) 0%, transparent 50%), radial-gradient(ellipse 50% 40% at 80% 90%, rgba(139,92,246,.2) 0%, transparent 50%), radial-gradient(ellipse 40% 30% at 50% 50%, rgba(74,222,128,.1) 0%, transparent 60%); background-attachment: fixed; color: var(--text); }
   ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: rgba(113,119,144,.3); border-radius: 10px; }
   .topbar { background: var(--surface); border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
   .section, .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+<style>.stars-bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; background: radial-gradient(ellipse at 50% 50%, #0a1628 0%, #050d18 40%, #02060c 70%, #000000 100%); } .stars-bg .stars { width: 1px; height: 1px; background: transparent; box-shadow: 501px 811px #fff,1450px 1324px #fff,1093px 1780px #fff,1469px 678px #fff,904px 741px #fff,1160px 781px #fff,1841px 1962px #fff,1630px 1667px #fff,1788px 676px #fff,367px 1734px #fff; animation: animStar 50s linear infinite; } .stars-bg .stars2 { width: 2px; height: 2px; background: transparent; box-shadow: 1925px 1320px #fff,693px 1778px #fff,1016px 711px #fff,1171px 563px #fff,661px 1919px #fff; animation: animStar 100s linear infinite; } .stars-bg .stars3 { width: 3px; height: 3px; background: transparent; box-shadow: 200px 981px #fff,1731px 521px #fff,132px 1039px #fff,1888px 1547px #fff,899px 1226px #fff; animation: animStar 150s linear infinite; } .stars-bg .stars:after, .stars-bg .stars2:after, .stars-bg .stars3:after { content: ""; position: absolute; top: 2000px; width: inherit; height: inherit; background: transparent; box-shadow: inherit; } @keyframes animStar { from { transform: translateY(0); } to { transform: translateY(-2000px); } }</style>
 </style>
+
 </head>
-<body>
+<body><div class="stars-bg"><div class="stars"></div><div class="stars2"></div><div class="stars3"></div></div>
 
 <div class="topbar">
     <h1>📁 FTP 配置</h1>
