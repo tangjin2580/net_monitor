@@ -865,7 +865,6 @@ ping_monitor() {
                 _HYST_GW_OK=$((_HYST_GW_OK + 1))
                 if (( _HYST_GW_OK >= HYSTERESIS_OK )); then
                     log_event "[RECOVER_GW] 网关恢复! rtt=${gw_rtt}ms (迟滞:${_HYST_GW_OK})"
-                    send_webhook "网关恢复" "网关 ${GW_V4} 已恢复, RTT=${gw_rtt}ms" "info" "recover_gw"
                     gw_down=false; gw_fail=0; _HYST_GW_OK=0
                 fi
             else
@@ -881,7 +880,6 @@ ping_monitor() {
                 gw_down_since=$(date '+%Y-%m-%d %H:%M:%S')
                 disc_events=$((disc_events + 1))
                 log_err "[GW_DOWN] 网关不可达! 连续 ${gw_fail} 次 #$disc_events"
-                send_webhook "网关不可达" "网关 ${GW_V4} 连续 ${FAIL_THRESHOLD} 次 ping 失败" "critical" "gw_down"
                 take_disconnect_snapshot "gw"
             elif $gw_down && (( gw_fail % 5 == 0 )); then
                 log_warn "[GW_STILL_DOWN] 网关仍不可达, 失败 ${gw_fail} 次"
@@ -912,7 +910,6 @@ ping_monitor() {
                 if (( _HYST_V4_OK >= HYSTERESIS_OK )); then
                     local dur=$(( $(date +%s) - $(date -d "$v4_down_since" +%s 2>/dev/null || echo 0) ))
                     log_event "[RECOVER_V4] IPv4 外网恢复! 断网 ${dur}s | $v4_target rtt=${v4_rtt}ms"
-                    send_webhook "IPv4 恢复" "IPv4 外网已恢复, 断网 ${dur}s, RTT=${v4_rtt}ms" "info" "recover_v4"
                     v4_down=false; v4_fail=0; _HYST_V4_OK=0
                 fi
             else
@@ -932,11 +929,9 @@ ping_monitor() {
                 disc_events=$((disc_events + 1))
                 if ! $v6_down; then
                     log_err "[V4_DOWN_V6_ALIVE] IPv4 外网断开但 IPv6 正常! ($v4_target) #$disc_events"
-                    send_webhook "IPv4 断连" "IPv4 外网断开但 IPv6 正常! 目标: $v4_target" "critical" "v4_down_v6_alive"
                     take_disconnect_snapshot "v4_only"
                 else
                     log_err "[V4_DOWN] IPv4 外网断开 ($v4_target) #$disc_events"
-                    send_webhook "IPv4 断连" "IPv4 外网断开! 目标: $v4_target" "critical" "v4_down"
                     take_disconnect_snapshot "all"
                 fi
                 fi
@@ -966,7 +961,6 @@ ping_monitor() {
                 if (( _HYST_V6_OK >= HYSTERESIS_OK )); then
                     local dur=$(( $(date +%s) - $(date -d "$v6_down_since" +%s 2>/dev/null || echo 0) ))
                     log_event "[RECOVER_V6] IPv6 外网恢复! 断网 ${dur}s | $v6_target rtt=${v6_rtt}ms"
-                    send_webhook "IPv6 恢复" "IPv6 外网已恢复, 断网 ${dur}s, RTT=${v6_rtt}ms" "info" "recover_v6"
                     v6_down=false; v6_fail=0; _HYST_V6_OK=0
                 fi
             else
@@ -985,10 +979,8 @@ ping_monitor() {
                 v6_down_since=$(date '+%Y-%m-%d %H:%M:%S')
                 if $v4_down; then
                     log_err "[V6_DOWN] IPv6 也断了! v4+v6 全断 | $v6_target"
-                    send_webhook "IPv6 断连" "IPv6 也断了! v4+v6 全断 | $v6_target" "critical" "v6_down"
                 else
                     log_err "[V6_DOWN_V4_ALIVE] IPv6 断开但 IPv4 正常! ($v6_target)"
-                    send_webhook "IPv6 断连" "IPv6 断开但 IPv4 正常! $v6_target" "critical" "v6_down_v4_alive"
                     take_disconnect_snapshot "v6_only"
                 fi
                 fi
