@@ -103,6 +103,36 @@ HYSTERESIS_OK=3
 # 状态异常需要连续 N 次失败才确认异常（避免误报）
 HYSTERESIS_FAIL=3
 
+# ─── 指标阈值默认 (可被 thresholds.json 覆盖, 变量名需与 JSON key 一致) ──
+TH_CPU_WARN=80;       TH_CPU_CRIT=90
+TH_MEM_WARN=85;       TH_MEM_CRIT=95
+TH_DISK_WARN=85;      TH_DISK_CRIT=95
+TH_RETRANS_WARN=2;    TH_RETRANS_CRIT=5      # TCP 重传率 %
+TH_LOSS_WARN=5;       TH_LOSS_CRIT=15        # 丢包率 %
+TH_RTT_WARN=150;      TH_RTT_CRIT=300        # 平均 RTT ms
+TH_QUALITY_WARN=70;   TH_QUALITY_CRIT=50     # 链路质量分
+TH_CONNTRACK_WARN=70; TH_CONNTRACK_CRIT=85   # conntrack 使用率 %
+# 公网 IP 采集间隔
+PUBLIC_IP_INTERVAL=300
+
+# 从 thresholds.json 载入阈值 (变量名即 JSON key, 如 {"TH_CPU_WARN":75})
+load_thresholds() {
+    [[ -f "$THRESHOLDS_CONF" ]] || return 0
+    local out
+    out=$(python3 - "$THRESHOLDS_CONF" <<'PYEOF' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for k, v in d.items():
+    if isinstance(v, (int, float)) and k.startswith("TH_"):
+        print(f"{k}={v}")
+PYEOF
+) || return 0
+    eval "$out"
+}
+
 # Webhook
 WEBHOOK_CONF="/opt/net_monitor/webhook.conf"
 WEBHOOK_MIN_INTERVAL=60
@@ -173,9 +203,17 @@ resolve_log_dir() {
 LOG_DIR="$(resolve_log_dir)"
 LOG_FILE="${LOG_DIR}/current.log"
 SNAPSHOT_DIR="${LOG_DIR}/snapshots"
+# 状态文件固定写本地目录 (Web 端 config.LOG_DIR 也指向本地, 不随 NAS 挂载漂移)
+STATE_DIR="${LOCAL_LOG_DIR}/state"
 
 # 重新初始化日志路径
-mkdir -p "$LOG_DIR" "$SNAPSHOT_DIR"
+mkdir -p "$LOG_DIR" "$SNAPSHOT_DIR" "$STATE_DIR"
+
+# 共享状态文件 (供 Web 端读取, 避免解析整份日志)
+PUBLIC_IP_STATE="${STATE_DIR}/public_ip.json"
+DEVICES_STATE="${STATE_DIR}/devices.json"
+HEALTH_STATE="${STATE_DIR}/health.json"
+THRESHOLDS_CONF="${LOG_DIR}/thresholds.json"
 
 # ─── 孤儿进程自清理: 启动前干掉仍在运行的旧实例 ────────────────────
 # 避免多次 restart (systemd / ctl / nohup) 叠加出多份监控 + ikuai_mon,
@@ -422,6 +460,7 @@ http_latency_monitor() {
 ###############################################################################
 stats_collector() {
     set +e
+    load_thresholds
     log_info "[stats_collector] 启动 (采集间隔 10s)"
 
     local PIPE="/tmp/net_monitor_stats.fifo"
@@ -439,6 +478,7 @@ stats_collector() {
     (( waited >= 60 )) && log_warn "[stats_collector] 管道未找到: $PIPE (Web 服务未启动?)"
 
     while true; do
+        load_thresholds   # 周期重载阈值 (支持运行时修改, 无需重启)
         # ─── 系统资源采集 ────────────────────────────────
         local cpu_pct=0 mem_pct=0 disk_pct=0 load1=0
 
@@ -479,6 +519,11 @@ stats_collector() {
 
         # 写入日志 (Web 服务会解析)
         log_info "[SYSTEM_STATS] cpu=${cpu_pct} mem=${mem_pct} disk=${disk_pct} load=${load1}"
+
+        # 指标阈值告警 (持续 HYSTERESIS_FAIL 次才触发, 带冷却)
+        eval_threshold "CPU" "$cpu_pct" "$TH_CPU_WARN" "$TH_CPU_CRIT" "%"
+        eval_threshold "MEM" "$mem_pct" "$TH_MEM_WARN" "$TH_MEM_CRIT" "%"
+        eval_threshold "DISK" "$disk_pct" "$TH_DISK_WARN" "$TH_DISK_CRIT" "%"
 
         # ─── 带宽采集 ────────────────────────────────────
         local rx_bytes=0 tx_bytes=0 rx_kbps=0 tx_kbps=0
@@ -526,6 +571,7 @@ stats_collector() {
         if [[ -p "$PIPE" ]]; then
             log_info "[TCP_RETRANS] rate=${retrans_rate}%"
         fi
+        eval_threshold "TCP_RETRANS" "$retrans_rate" "$TH_RETRANS_WARN" "$TH_RETRANS_CRIT" "%"
 
         sleep 10
     done
@@ -755,8 +801,10 @@ lan_ping_check() {
             rtt=$(echo "$out" | grep -oP 'time=\K[\d.]+' | head -1)
             [[ -z "$rtt" ]] && rtt="?"
             log_info "[LAN_PING] ${name}|${ip}|OK|${rtt}ms"
+            presence_update "$ip" online v4
         else
             log_warn "[LAN_PING] ${name}|${ip}|FAIL|-"
+            presence_update "$ip" offline v4
         fi
     done
 }
@@ -779,6 +827,7 @@ tcp_probe() {
 
 ping_monitor() {
     set +e
+    load_thresholds
     log_info "[ping_monitor] v4 启动 (迟滞机制: OK=${HYSTERESIS_OK}, FAIL=${HYSTERESIS_FAIL})"
 
     local v4_fail=0 v6_fail=0 gw_fail=0
@@ -798,6 +847,7 @@ ping_monitor() {
 
     while true; do
         total=$((total + 1))
+        (( total % 15 == 0 )) && load_thresholds   # 每 ~30s 重载阈值
 
         # ── Ping 网关 (IPv4) ──
         local gw_rtt="?"
@@ -970,6 +1020,11 @@ ping_monitor() {
             avg_rtt=$((rtt_sum / rtt_len))
             jitter=$((rtt_max - rtt_min))
             quality=$(link_quality_score "$packet_loss" "$avg_rtt" "$jitter")
+            # 指标阈值告警 (丢包/延迟/链路质量)
+            eval_threshold "LOSS" "$packet_loss" "$TH_LOSS_WARN" "$TH_LOSS_CRIT" "%"
+            eval_threshold "RTT" "$avg_rtt" "$TH_RTT_WARN" "$TH_RTT_CRIT" "ms"
+            # 链路质量分: 越低越差 -> 反向阈值
+            eval_threshold "QUALITY" "$quality" "$TH_QUALITY_WARN" "$TH_QUALITY_CRIT" "" "inv"
         fi
 
         # ── 正常心跳 (~100 秒) ──
@@ -1024,7 +1079,7 @@ arp_monitor() {
             local v4_arp
             v4_arp=$(cat "$arp_file" | grep "$IFACE" | grep -v "00:00:00:00:00:00")
             local now_file="/tmp/arp_v4_now_$$"
-            echo "$v4_arp" | awk '{print $1}' | sort > "$now_file"
+            echo "$v4_arp" | awk '{print $1, $4}' | sort > "$now_file"
             if [[ -f "$prev_v4_file" ]]; then
                 local disappeared appeared
                 disappeared=$(comm -23 "$prev_v4_file" "$now_file")
@@ -1036,9 +1091,15 @@ arp_monitor() {
                     if (( cnt > 5 )); then
                         log_err "[MASS_LEAVE] $cnt 个设备同时消失! 可能本机断网"
                     fi
+                    while read -r dip dmac; do
+                        [[ -n "$dip" ]] && presence_update "$dip" offline v4 "$dmac"
+                    done <<< "$disappeared"
                 fi
                 if [[ -n "$appeared" ]]; then
                     log_event "[ARP_NEW] $(echo "$appeared" | wc -l) 个 IPv4 新设备"
+                    while read -r aip amac; do
+                        [[ -n "$aip" ]] && presence_update "$aip" online v4 "$amac"
+                    done <<< "$appeared"
                 fi
             fi
             cp "$now_file" "$prev_v4_file"
@@ -1046,7 +1107,11 @@ arp_monitor() {
         elif (( prev_v4_mtime == 0 )); then
             local v4_arp
             v4_arp=$(cat "$arp_file" | grep "$IFACE" | grep -v "00:00:00:00:00:00")
-            echo "$v4_arp" | awk '{print $1}' | sort > "$prev_v4_file"
+            echo "$v4_arp" | awk '{print $1, $4}' | sort > "$prev_v4_file"
+            # 初始快照: 当前在线设备标记为 online (供"谁在家"视图)
+            while read -r ip mac; do
+                [[ -n "$ip" ]] && presence_update "$ip" online v4 "$mac"
+            done < <(echo "$v4_arp" | awk '{print $1, $4}')
         fi
         prev_v4_mtime=$cur_v4_mtime
 
@@ -1057,22 +1122,31 @@ arp_monitor() {
 
         if [[ -n "$prev_v6_hash" ]] && [[ "$v6_hash" != "$prev_v6_hash" ]]; then
             local v6_file="/tmp/nd_v6_now_$$"
-            echo "$v6_nd" | awk '{print $1}' | sort > "$v6_file"
+            echo "$v6_nd" | awk '{mac=""; for(i=1;i<=NF;i++) if($i=="lladdr") mac=$(i+1); print $1, mac}' | sort > "$v6_file"
             if [[ -f "$prev_v6_file" ]]; then
                 local v6_disappeared v6_appeared
                 v6_disappeared=$(comm -23 "$prev_v6_file" "$v6_file")
                 v6_appeared=$(comm -13 "$prev_v6_file" "$v6_file")
                 if [[ -n "$v6_disappeared" ]]; then
                     log_event "[ND_LOST] $(echo "$v6_disappeared" | wc -l) 个 IPv6 邻居消失"
+                    while read -r dip dmac; do
+                        [[ -n "$dip" ]] && presence_update "$dip" offline v6 "$dmac"
+                    done <<< "$v6_disappeared"
                 fi
                 if [[ -n "$v6_appeared" ]]; then
                     log_event "[ND_NEW] $(echo "$v6_appeared" | wc -l) 个 IPv6 新邻居"
+                    while read -r aip amac; do
+                        [[ -n "$aip" ]] && presence_update "$aip" online v6 "$amac"
+                    done <<< "$v6_appeared"
                 fi
             fi
             cp "$v6_file" "$prev_v6_file"
             rm -f "$v6_file"
         elif [[ -z "$prev_v6_hash" ]]; then
-            echo "$v6_nd" | awk '{print $1}' | sort > "$prev_v6_file"
+            echo "$v6_nd" | awk '{mac=""; for(i=1;i<=NF;i++) if($i=="lladdr") mac=$(i+1); print $1, mac}' | sort > "$prev_v6_file"
+            while read -r ip mac; do
+                [[ -n "$ip" ]] && presence_update "$ip" online v6 "$mac"
+            done < <(echo "$v6_nd" | awk '{mac=""; for(i=1;i<=NF;i++) if($i=="lladdr") mac=$(i+1); print $1, mac}')
         fi
         prev_v6_hash="$v6_hash"
 
@@ -1468,6 +1542,166 @@ ikuai_wan_monitor() {
 }
 
 ###############################################################################
+# 共享状态辅助 (供 Web 读取的结构化状态)
+###############################################################################
+
+# 设备在线状态持久化: 更新 state/devices.json
+# 用法: presence_update <ip> <online|offline> <v4|v6> [mac]
+presence_update() {
+    local ip="$1" status="$2" proto="${3:-v4}" mac="${4:-}"
+    local now
+    now=$(date +%s)
+    python3 - "$DEVICES_STATE" "$ip" "$status" "$proto" "$mac" "$now" <<'PYEOF'
+import json, sys, os
+path, ip, status, proto, mac, now = sys.argv[1:7]
+now = int(now)
+d = {}
+if os.path.exists(path):
+    try:
+        d = json.load(open(path))
+    except Exception:
+        d = {}
+rec = d.get(ip, {})
+if status == "online":
+    if rec.get("status") != "online":
+        rec.setdefault("first_seen", now)
+    rec["last_seen"] = now
+    rec["status"] = "online"
+    rec.pop("offline_since", None)
+else:
+    if rec.get("status") == "online":
+        rec["offline_since"] = now
+    rec["status"] = "offline"
+    rec.setdefault("first_seen", now)
+rec["proto"] = proto
+if mac:
+    rec["mac"] = mac
+d[ip] = rec
+tmp = path + ".tmp"
+json.dump(d, open(tmp, "w"), ensure_ascii=False, indent=2)
+os.replace(tmp, path)
+PYEOF
+}
+
+# 指标阈值检查 (带迟滞 + 冷却, 复用 send_webhook)
+# 用法: eval_threshold <key> <value> <warn> <crit> <unit> [hi|inv]
+#   dir=hi  (默认, 越高越差): value>=crit -> critical; value>=warn -> warning
+#   dir=inv (越低越差, 如链路质量分): value<=crit -> critical; value<=warn -> warning
+#   回落到正常区间持续 HYSTERESIS_FAIL 次 -> 恢复(info)
+declare -A _TH_FAIL=()
+declare -A _TH_STATE=()   # ok | warn | crit
+eval_threshold() {
+    local key="$1" value="$2" warn="$3" crit="$4" unit="${5:-}" dir="${6:-hi}"
+    [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 0
+    local v w c
+    v=$(awk "BEGIN{print $value+0}"); w=$(awk "BEGIN{print $warn+0}"); c=$(awk "BEGIN{print $crit+0}")
+    local prev="${_TH_STATE[$key]:-ok}"
+    local fail="${_TH_FAIL[$key]:-0}"
+    local new_state="$prev"
+    local over_c=0 over_w=0
+    # 用 awk 的退出码判断阈值(awk 用 exit, 无 stdout, 不能直接 $(...) 捕获)
+    if [[ "$dir" == "inv" ]]; then
+        awk "BEGIN{exit !($v<=$c)}" && over_c=1 || over_c=0
+        awk "BEGIN{exit !($v<=$w)}" && over_w=1 || over_w=0
+    else
+        awk "BEGIN{exit !($v>=$c)}" && over_c=1 || over_c=0
+        awk "BEGIN{exit !($v>=$w)}" && over_w=1 || over_w=0
+    fi
+    if (( over_c == 1 )); then
+        fail=$((fail + 1))
+        if (( fail >= HYSTERESIS_FAIL )) && [[ "$prev" != "crit" ]]; then
+            new_state="crit"
+        fi
+    elif (( over_w == 1 )); then
+        fail=$((fail + 1))
+        if (( fail >= HYSTERESIS_FAIL )) && [[ "$prev" != "crit" ]]; then
+            new_state="warn"
+        fi
+    else
+        fail=$((fail - 1)); (( fail < 0 )) && fail=0
+        if (( fail == 0 )); then new_state="ok"; fi
+    fi
+    _TH_FAIL[$key]=$fail
+    if [[ "$new_state" != "$prev" ]]; then
+        _TH_STATE[$key]="$new_state"
+        if [[ "$new_state" == "crit" ]]; then
+            log_err "[THRESH_${key}] 临界: ${value}${unit} (阈值 ${crit}${unit})"
+            send_webhook "${key} 临界" "${key} 达到 ${value}${unit}, 阈值 ${crit}${unit}" "critical" "thresh_${key}"
+        elif [[ "$new_state" == "warn" ]]; then
+            log_warn "[THRESH_${key}] 偏高: ${value}${unit} (阈值 ${warn}${unit})"
+            send_webhook "${key} 偏高" "${key} 达到 ${value}${unit}, 阈值 ${warn}${unit}" "warning" "thresh_${key}"
+        else
+            log_info "[THRESH_${key}] 恢复正常: ${value}${unit}"
+            send_webhook "${key} 恢复" "${key} 回落至 ${value}${unit}" "info" "thresh_${key}"
+        fi
+    fi
+}
+
+# 公网 IP 监控 (定时取爱快 WAN 公网地址, 变化即告警, 顺带判定 CGNAT)
+public_ip_monitor() {
+    set +e
+    log_info "[public_ip_monitor] 启动 (每 ${PUBLIC_IP_INTERVAL}s)"
+    local last_ipv4=""
+    while true; do
+        local ipv4 cgnat=0
+        # 优先从爱快 WAN1 取公网 IPv4 (sys.path 注入 /opt/net_monitor)
+        ipv4=$(PYTHONPATH=/opt/net_monitor python3 - <<'PYEOF' 2>/dev/null
+try:
+    import sys; sys.path.insert(0, '/opt/net_monitor')
+    from ikuai_client import get_ikuai_wan_status
+    d = get_ikuai_wan_status()
+    for w in d.get("wan_list", []):
+        if w.get("name") == "WAN1":
+            print(w.get("ipv4") or ""); break
+    else:
+        print("")
+except Exception:
+    print("")
+PYEOF
+)
+        # 兜底: 外部服务
+        if [[ -z "$ipv4" ]]; then
+            ipv4=$(curl -4 -s -m 5 https://api.ipify.org 2>/dev/null \
+                   || curl -4 -s -m 5 https://ifconfig.me/ip 2>/dev/null \
+                   || echo "")
+        fi
+        # CGNAT 判定: 100.64.0.0/10
+        if [[ "$ipv4" =~ ^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\. ]]; then
+            cgnat=1
+        fi
+        local now; now=$(date +%s)
+        if [[ -n "$ipv4" && "$ipv4" != "$last_ipv4" ]]; then
+            if [[ -n "$last_ipv4" ]]; then
+                log_event "[PUBLIC_IP_CHANGE] 公网 IPv4 变化: $last_ipv4 -> $ipv4${cgnat:+' (CGNAT)'}"
+                send_webhook "公网IP变化" "IPv4 公网地址变更: $last_ipv4 -> $ipv4${cgnat:+' (CGNAT)'}" "warning" "public_ip"
+            else
+                log_info "[PUBLIC_IP] 当前公网 IPv4: $ipv4${cgnat:+' (CGNAT)'}"
+            fi
+            last_ipv4="$ipv4"
+        fi
+        python3 - "$PUBLIC_IP_STATE" "$ipv4" "$cgnat" "$now" <<'PYEOF'
+import json, sys, os
+path, ipv4, cgnat, now = sys.argv[1:5]
+now = int(now); cgnat = int(cgnat)
+d = {}
+if os.path.exists(path):
+    try:
+        d = json.load(open(path))
+    except Exception:
+        d = {}
+prev = d.get("ipv4")
+d["ipv4"] = ipv4; d["cgnat"] = bool(cgnat); d["updated"] = now
+if prev and prev != ipv4:
+    d["prev_ipv4"] = prev
+tmp = path + ".tmp"
+json.dump(d, open(tmp, "w"), ensure_ascii=False, indent=2)
+os.replace(tmp, path)
+PYEOF
+        sleep "$PUBLIC_IP_INTERVAL"
+    done
+}
+
+###############################################################################
 # 清理与启动
 ###############################################################################
 cleanup() {
@@ -1488,32 +1722,78 @@ log_info "日志目录: $LOG_DIR (COMPACT=$COMPACT_LOG)"
 log_info "迟滞: OK=${HYSTERESIS_OK} FAIL=${FAIL_THRESHOLD}"
 log_info "=============================================="
 
-ping_monitor &
-arp_monitor &
-route_monitor &
-event_monitor &
-dns_monitor &
-conntrack_monitor &
-traceroute_monitor &
-http_latency_monitor &
-    stats_collector &
-    # 爱快路由器监控（独立进程）
-    python3 /home/li/ikuai_mon.py --monitor >> "$LOG_FILE" 2>&1 &
+# ─── 受监管启动: 记录 PID, 主循环自动拉起死亡子进程 ───────────────
+declare -A _PROC_PID=()
+declare -A _PROC_CMD=()
+launch_monitor() {
+    local name="$1" cmd="$2"
+    eval "$cmd &"
+    _PROC_PID[$name]=$!
+    _PROC_CMD[$name]="$cmd"
+    log_info "[SUPERVISE] 启动 $name (PID ${_PROC_PID[$name]})"
+}
 
-    # 爱快 WAN 状态监控 (含联通2告警)
-    ikuai_wan_monitor &
+launch_monitor "ping_monitor"      "ping_monitor"
+launch_monitor "arp_monitor"       "arp_monitor"
+launch_monitor "route_monitor"     "route_monitor"
+launch_monitor "event_monitor"     "event_monitor"
+launch_monitor "dns_monitor"       "dns_monitor"
+launch_monitor "conntrack_monitor" "conntrack_monitor"
+launch_monitor "traceroute_monitor" "traceroute_monitor"
+launch_monitor "http_latency"      "http_latency_monitor"
+launch_monitor "stats_collector"   "stats_collector"
+launch_monitor "ikuai_wan"         "ikuai_wan_monitor"
+launch_monitor "ikuai_mon"         'python3 /home/li/ikuai_mon.py --monitor >> "$LOG_FILE" 2>&1'
+launch_monitor "public_ip"         "public_ip_monitor"
 
-log_info "9 个监控子进程已启动"
+log_info "${#_PROC_PID[@]} 个监控子进程已受监管启动"
 
-# 主循环 (每60秒检查 NAS 可用性 + 日志轮转)
+# 写 health.json (供 Web /api/health 读取)
+write_health() {
+    local alive=0 total=0
+    for name in "${!_PROC_PID[@]}"; do
+        pid=${_PROC_PID[$name]}
+        kill -0 "$pid" 2>/dev/null && alive=$((alive + 1))
+        total=$((total + 1))
+    done
+    local now; now=$(date +%s)
+    local log_mtime=0
+    [[ -f "$LOG_FILE" ]] && log_mtime=$(stat -c%Y "$LOG_FILE" 2>/dev/null || echo 0)
+    python3 - "$HEALTH_STATE" "$now" "$log_mtime" "$alive" "$total" "$PID_FILE" <<'PYEOF'
+import json, sys, os
+path, now, log_mtime, alive, total, pidfile = sys.argv[1:7]
+now = int(now); log_mtime = int(log_mtime); alive = int(alive); total = int(total)
+mpid = None
+if os.path.exists(pidfile):
+    try:
+        mpid = int(open(pidfile).read().strip() or 0)
+    except Exception:
+        mpid = None
+d = {"updated": now, "log_mtime": log_mtime, "log_age": now - log_mtime,
+     "monitor_pid": mpid, "subprocesses_alive": alive,
+     "subprocesses_total": total, "ok": alive >= total}
+tmp = path + ".tmp"
+json.dump(d, open(tmp, "w"), ensure_ascii=False, indent=2)
+os.replace(tmp, path)
+PYEOF
+}
+
+# 主循环 (每30秒: NAS/轮转/自愈/health)
 while true; do
-    sleep 60
+    sleep 30
     rotate_log
     check_nas_switch
-    # 健康检查: 核心进程必须存活
-    alive=0
-    for pid in $(jobs -p); do
-        kill -0 "$pid" 2>/dev/null && alive=$((alive + 1))
+    # 自愈: 死亡的子进程自动拉起
+    dead=0
+    for name in "${!_PROC_PID[@]}"; do
+        pid=${_PROC_PID[$name]}
+        if ! kill -0 "$pid" 2>/dev/null; then
+            dead=$((dead + 1))
+            log_err "[SUPERVISE] $name (PID $pid) 已退出, 重新拉起..."
+            eval "${_PROC_CMD[$name]} &"
+            _PROC_PID[$name]=$!
+        fi
     done
-    (( alive < 8 )) && log_warn "[HEALTH] 子进程异常: $alive (预期 9 个)"
+    (( dead > 0 )) && send_webhook "监控自愈" "$dead 个子进程被自动重启" "warning" "supervise_restart"
+    write_health
 done

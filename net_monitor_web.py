@@ -116,7 +116,7 @@ def main() -> None:
     logger.info("[THREAD] ftp_daily_uploader 已启动")
 
     # 启动日志监控线程
-    watcher = threading.Thread(target=log_watcher, daemon=True)
+    watcher = threading.Thread(target=log_watcher, daemon=True, name="log_watcher")
     watcher.start()
     logger.info("[THREAD] log_watcher 已启动")
 

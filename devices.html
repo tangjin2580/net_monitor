@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>设备 & 网络状态 — 网络监控</title>
+<style>
+:root {
+  --bg:#0a0c15; --surface:rgba(22,27,42,.7); --surface2:rgba(30,36,56,.55);
+  --border:rgba(113,119,144,.2); --text:#e6edf3; --text2:#8b949e;
+  --green:#4ade80; --red:#f87171; --yellow:#facc15; --blue:#60a5fa;
+  --green-bg:rgba(63,185,80,.12); --red-bg:rgba(248,81,73,.12);
+  --yellow-bg:rgba(210,153,34,.12); --blue-bg:rgba(88,166,255,.12);
+  --radius:12px; --mono:'JetBrains Mono','Fira Code',monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+       background:var(--bg); color:var(--text); min-height:100vh; }
+.topbar { display:flex; align-items:center; justify-content:space-between;
+          padding:12px 24px; background:var(--surface); border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px; }
+.topbar h1 { font-size:16px; font-weight:600; display:flex; align-items:center; gap:8px; }
+.topbar .actions { display:flex; gap:8px; flex-wrap:wrap; }
+.topbar a { color:var(--text2); text-decoration:none; font-size:12px; padding:6px 14px;
+            border:1px solid var(--border); border-radius:var(--radius); }
+.topbar a:hover { border-color:var(--blue); color:var(--text); }
+.topbar a.active { border-color:var(--blue); color:var(--text); background:var(--blue-bg); }
+.container { max-width:1100px; margin:0 auto; padding:24px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-bottom:24px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px; }
+.card h3 { font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); margin-bottom:10px; }
+.card .big { font-size:22px; font-weight:600; font-family:var(--mono); }
+.badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.badge.ok { background:var(--green-bg); color:var(--green); }
+.badge.warn { background:var(--yellow-bg); color:var(--yellow); }
+.badge.err { background:var(--red-bg); color:var(--red); }
+.section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px; margin-bottom:24px; }
+.section h2 { font-size:14px; font-weight:600; margin-bottom:16px; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); }
+th { color:var(--text2); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+td.ip { font-family:var(--mono); }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+.dot.online { background:var(--green); }
+.dot.offline { background:var(--red); }
+.muted { color:var(--text2); }
+.refresh { font-size:12px; color:var(--text2); margin-bottom:12px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>📡 设备 & 网络状态</h1>
+  <div class="actions">
+    <a href="/dashboard.html">仪表盘</a>
+    <a href="/ikuai.html">爱快</a>
+    <a href="/devices.html" class="active">设备</a>
+    <a href="/ftp.html">FTP</a>
+    <a href="/config.html">配置</a>
+  </div>
+</div>
+
+<div class="container">
+  <div class="cards">
+    <div class="card">
+      <h3>公网 IPv4</h3>
+      <div class="big" id="pub-ip">—</div>
+      <div id="pub-cgnat" class="muted" style="margin-top:6px;font-size:12px;"></div>
+    </div>
+    <div class="card">
+      <h3>监控健康</h3>
+      <div id="health-badge" class="badge ok">—</div>
+      <div id="health-sub" class="muted" style="margin-top:8px;font-size:12px;"></div>
+    </div>
+    <div class="card">
+      <h3>在线设备</h3>
+      <div class="big" id="online-count">—</div>
+      <div class="muted" style="margin-top:6px;font-size:12px;">共 <span id="total-count">—</span> 个</div>
+    </div>
+    <div class="card">
+      <h3>日志新鲜度</h3>
+      <div class="big" id="log-age">—</div>
+      <div class="muted" style="margin-top:6px;font-size:12px;">距最后写入</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>设备在线 / 离线时间线</h2>
+    <div class="refresh" id="refresh-note">每 15 秒自动刷新</div>
+    <table>
+      <thead>
+        <tr><th>状态</th><th>名称</th><th>IP</th><th>MAC</th><th>协议</th><th>最后在线</th><th>离线时长</th></tr>
+      </thead>
+      <tbody id="dev-tbody"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function fmtAgo(ts) {
+  if (!ts) return '—';
+  const d = Math.floor(Date.now()/1000 - ts);
+  if (d < 60) return d + ' 秒';
+  if (d < 3600) return Math.floor(d/60) + ' 分';
+  if (d < 86400) return Math.floor(d/3600) + ' 时';
+  return Math.floor(d/86400) + ' 天';
+}
+function fmtTime(ts) {
+  if (!ts) return '—';
+  const dt = new Date(ts*1000);
+  return dt.toLocaleString('zh-CN', {hour12:false});
+}
+async function loadPublicIp() {
+  try {
+    const r = await fetch('/api/public_ip'); const d = await r.json();
+    document.getElementById('pub-ip').textContent = d.ipv4 || '未知';
+    document.getElementById('pub-cgnat').textContent = d.cgnat ? '⚠ 处于 CGNAT (100.64.0.0/10)' : (d.updated ? '更新于 ' + fmtTime(d.updated) : '');
+  } catch(e) { document.getElementById('pub-ip').textContent = '获取失败'; }
+}
+async function loadHealth() {
+  try {
+    const r = await fetch('/api/health'); const d = await r.json();
+    const badge = document.getElementById('health-badge');
+    const ok = d.ok;
+    badge.className = 'badge ' + (ok ? 'ok' : 'err');
+    badge.textContent = ok ? '正常' : '异常';
+    const m = d.monitor || {};
+    const wt = d.web_threads || {};
+    const wtBad = Object.entries(wt).filter(([k,v])=>!v).map(([k])=>k);
+    document.getElementById('health-sub').innerHTML =
+      '监控进程: ' + (m.alive ? '存活' : '死亡') + ' (' + (m.subprocesses_alive||'?') + '/' + (m.subprocesses_total||'?') + ')<br>' +
+      'Web线程: ' + (wtBad.length ? '<span style="color:var(--red)">' + wtBad.join(',') + '</span>' : '全部存活');
+    document.getElementById('log-age').textContent = (m.log_age!=null ? m.log_age + ' 秒' : '—');
+  } catch(e) {
+    const badge = document.getElementById('health-badge');
+    badge.className = 'badge err'; badge.textContent = '不可达';
+  }
+}
+async function loadDevices() {
+  try {
+    const r = await fetch('/api/devices'); const d = await r.json();
+    const rows = (d.devices||[]).map(x => {
+      const on = x.status === 'online';
+      const offline = on ? '' : fmtAgo(x.offline_since);
+      return '<tr>' +
+        '<td><span class="dot ' + (on?'online':'offline') + '"></span>' + (on?'在线':'离线') + '</td>' +
+        '<td>' + (x.name || '<span class="muted">未知</span>') + '</td>' +
+        '<td class="ip">' + x.ip + '</td>' +
+        '<td class="ip">' + (x.mac || '—') + '</td>' +
+        '<td>' + (x.proto || '—') + '</td>' +
+        '<td>' + (on ? fmtTime(x.last_seen) : fmtAgo(x.last_seen)) + '</td>' +
+        '<td>' + (offline || '—') + '</td>' +
+      '</tr>';
+    }).join('');
+    document.getElementById('dev-tbody').innerHTML = rows || '<tr><td colspan="7" class="muted">暂无设备</td></tr>';
+    const online = (d.devices||[]).filter(x=>x.status==='online').length;
+    document.getElementById('online-count').textContent = online;
+    document.getElementById('total-count').textContent = d.count||0;
+  } catch(e) {
+    document.getElementById('dev-tbody').innerHTML = '<tr><td colspan="7" class="muted">加载失败</td></tr>';
+  }
+}
+function refreshAll() { loadPublicIp(); loadHealth(); loadDevices(); }
+refreshAll();
+setInterval(refreshAll, 15000);
+</script>
+</body>
+</html>

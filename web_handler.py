@@ -32,6 +32,22 @@ from ftp_manager import (
 from targets_manager import read_monitor_targets, write_monitor_targets
 from traceroute_parser import read_all_traces
 
+# ─── 监控端共享状态文件 (net_monitor.sh 写入, Web 只读) ───────────────
+STATE_DIR = os.path.join(LOG_DIR, "state")
+HEALTH_STATE = os.path.join(STATE_DIR, "health.json")
+DEVICES_STATE = os.path.join(STATE_DIR, "devices.json")
+PUBLIC_IP_STATE = os.path.join(STATE_DIR, "public_ip.json")
+THRESHOLDS_CONF = os.path.join(LOG_DIR, "thresholds.json")
+
+
+def _read_json(path, default=None):
+    """安全读取 JSON 状态文件, 不存在/损坏时返回 default"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
 
 # ─── 辅助函数 ────────────────────────────────────────────────────────
 
@@ -219,6 +235,13 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
                 self.send_html(f.read())
         except Exception as e:
             self.send_html("<h2>FTP 配置页面未找到</h2><p>%s</p>" % str(e))
+
+    def _serve_devices(self):
+        try:
+            with open(os.path.join(SCRIPT_DIR, 'devices.html'), 'r', encoding='utf-8') as f:
+                self.send_html(f.read())
+        except Exception as e:
+            self.send_html("<h2>设备页面未找到</h2><p>%s</p>" % str(e))
 
     def _serve_config(self):
         try:
@@ -919,6 +942,116 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(f'{{"error":"{str(e)}"}}\n'.encode())
 
+    # ─── API 路由: 健康/设备/公网IP/阈值 ──────────────────────────
+
+    def _healthz(self):
+        """外部探活端点 (UptimeRobot 等): 始终 200 + OK"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def _api_health(self):
+        """聚合健康: 监控端子进程存活 + 日志新鲜度 + Web 各线程存活"""
+        import threading
+        mon = _read_json(HEALTH_STATE, {})
+        mpid = mon.get("monitor_pid")
+        monitor_alive = False
+        if mpid:
+            try:
+                os.kill(mpid, 0)
+                monitor_alive = True
+            except OSError:
+                monitor_alive = False
+        web_threads = {}
+        for name in ("history_recorder", "log_watcher", "sys_stats", "ftp_uploader"):
+            web_threads[name] = any(
+                t.name == name and t.is_alive() for t in threading.enumerate()
+            )
+        log_age = mon.get("log_age")
+        result = {
+            "monitor": {
+                "pid": mpid,
+                "alive": monitor_alive,
+                "subprocesses_alive": mon.get("subprocesses_alive"),
+                "subprocesses_total": mon.get("subprocesses_total"),
+                "log_age": log_age,
+            },
+            "web_threads": web_threads,
+            "ok": monitor_alive and all(web_threads.values())
+                  and (log_age is None or log_age < 600),
+            "ts": int(time.time()),
+        }
+        self.send_json(result)
+
+    def _api_devices(self):
+        """设备在线/离线时间线: 合并 presence 状态与 LAN 主机名"""
+        devices = _read_json(DEVICES_STATE, {}) or {}
+        try:
+            cfg = read_monitor_targets()
+            name_map = {h["ip"]: h["name"] for h in cfg.get("lan", {}).get("hosts", [])}
+        except Exception:
+            name_map = {}
+        out = []
+        for ip, rec in devices.items():
+            entry = dict(rec)
+            entry["ip"] = ip
+            entry["name"] = name_map.get(ip, "")
+            out.append(entry)
+        out.sort(key=lambda e: (e.get("status") != "online", -e.get("last_seen", 0)))
+        self.send_json({"devices": out, "count": len(out)})
+
+    def _api_public_ip(self):
+        """当前公网 IPv4 及 CGNAT 判定"""
+        self.send_json(_read_json(PUBLIC_IP_STATE, {}))
+
+    def _api_thresholds(self):
+        """读取当前阈值 (默认值或被 thresholds.json 覆盖)"""
+        defaults = {
+            "TH_CPU_WARN": 80, "TH_CPU_CRIT": 90,
+            "TH_MEM_WARN": 85, "TH_MEM_CRIT": 95,
+            "TH_DISK_WARN": 85, "TH_DISK_CRIT": 95,
+            "TH_RETRANS_WARN": 2, "TH_RETRANS_CRIT": 5,
+            "TH_LOSS_WARN": 5, "TH_LOSS_CRIT": 15,
+            "TH_RTT_WARN": 150, "TH_RTT_CRIT": 300,
+            "TH_QUALITY_WARN": 70, "TH_QUALITY_CRIT": 50,
+            "TH_CONNTRACK_WARN": 70, "TH_CONNTRACK_CRIT": 85,
+        }
+        cur = _read_json(THRESHOLDS_CONF, {}) or {}
+        merged = {k: cur.get(k, v) for k, v in defaults.items()}
+        self.send_json({"defaults": defaults, "current": merged,
+                        "note": "修改后监控端约 10-30s 内自动生效, 无需重启"})
+
+    def _api_thresholds_post(self):
+        """写入阈值 (仅接受 TH_* 数值键)"""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            data = json.loads(body)
+        except Exception as e:
+            self.send_json({"success": False, "message": str(e)}, 500)
+            return
+        allowed = {"TH_CPU_WARN", "TH_CPU_CRIT", "TH_MEM_WARN", "TH_MEM_CRIT",
+                   "TH_DISK_WARN", "TH_DISK_CRIT", "TH_RETRANS_WARN", "TH_RETRANS_CRIT",
+                   "TH_LOSS_WARN", "TH_LOSS_CRIT", "TH_RTT_WARN", "TH_RTT_CRIT",
+                   "TH_QUALITY_WARN", "TH_QUALITY_CRIT",
+                   "TH_CONNTRACK_WARN", "TH_CONNTRACK_CRIT"}
+        new_cfg = {}
+        for k, v in data.items():
+            if k in allowed and isinstance(v, (int, float)):
+                new_cfg[k] = v
+        if not new_cfg:
+            self.send_json({"success": False, "message": "无有效阈值项"})
+            return
+        try:
+            with open(THRESHOLDS_CONF, "w", encoding="utf-8") as f:
+                json.dump(new_cfg, f, ensure_ascii=False, indent=2)
+            self.send_json({"success": True,
+                            "message": "阈值已保存, 监控端将自动重载",
+                            "written": new_cfg})
+        except OSError as e:
+            self.send_json({"success": False, "message": str(e)}, 500)
+
     # ─── 路由分发 ────────────────────────────────────────────────
 
     def do_GET(self):
@@ -941,6 +1074,8 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             return self._serve_admin()
         elif path in ('/music_config.html', '/music'):
             return self._serve_music_config()
+        elif path in ('/devices.html', '/devices'):
+            return self._serve_devices()
 
         # 静态文件 (播放器等)
         elif path.startswith('/player/') or path.startswith('/js/') or path.startswith('/css/') or \
@@ -1029,6 +1164,18 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         elif path == '/api/control':
             return self._api_control_get(qs)
 
+        # 健康/设备/公网IP/阈值 API
+        elif path == '/healthz':
+            return self._healthz()
+        elif path == '/api/health':
+            return self._api_health()
+        elif path == '/api/devices':
+            return self._api_devices()
+        elif path == '/api/public_ip':
+            return self._api_public_ip()
+        elif path == '/api/thresholds':
+            return self._api_thresholds()
+
         # SSE
         elif path == '/api/stream':
             return self._api_stream()
@@ -1050,6 +1197,8 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             return self._api_webhook_post()
         elif path == '/api/ftp_config':
             return self._api_ftp_config_post()
+        elif path == '/api/thresholds':
+            return self._api_thresholds_post()
         elif path == '/api/monitor_targets':
             return self._api_monitor_targets_post()
         elif path == '/api/control':
