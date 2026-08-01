@@ -22,7 +22,7 @@ from config import (
 from ikuai_client import (
     ikuai_call, get_ikuai_overview, get_ikuai_wan_status,
     get_cached_wan_status, refresh_wan_cache,
-    get_ikuai_sysinfo,
+    get_ikuai_sysinfo, get_ikuai_live_conn_cached,
 )
 from history_recorder import read_history
 from ftp_manager import (
@@ -636,9 +636,17 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         self.send_json(all_data)
 
     def _api_ikuai_sysinfo(self):
-        """实时路由器 CPU/内存"""
+        """实时路由器 CPU/内存
+        补充:
+          - live_conn: 来自 overview 的实时 WAN 会话数 (无 monitor_system 的采样滞后)
+          - data_stale: monitor_system 采样滞后 > 600s 时为 True (曲线/CPU 卡旧值)
+        """
         try:
-            self.send_json(get_ikuai_sysinfo())
+            data = get_ikuai_sysinfo()
+            data["live_conn"] = get_ikuai_live_conn_cached()
+            age = data.get("sysinfo_age")
+            data["data_stale"] = bool(age is not None and age > 600)
+            self.send_json(data)
         except Exception as e:
             self.send_json({"error": str(e)})
 

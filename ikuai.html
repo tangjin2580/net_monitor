@@ -37,6 +37,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 .card.warning { border-left: 3px solid var(--yellow); }
 .green-text { color: var(--green); }
 .red-text { color: var(--red); }
+/* 数据滞后提示横幅 */
+.stale-banner { margin: 0 0 12px; padding: 10px 14px; border-radius: var(--radius);
+    background: rgba(240,136,62,.12); border: 1px solid var(--orange); color: var(--orange);
+    font-size: 13px; line-height: 1.5; }
+.stale-banner b { color: var(--orange); }
 
 /* 表格 */
 .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 20px; }
@@ -183,6 +188,7 @@ tr:hover td { background: rgba(88,166,255,.06); }
     <!-- 趋势图表 -->
     <div id="trend-section" style="display:none">
         <!-- 实时卡片 -->
+        <div id="sysinfo-stale" class="stale-banner" style="display:none"></div>
         <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap">
             <div class="card" style="flex:1;min-width:120px;padding:12px 16px">
                 <div class="label">CPU</div>
@@ -193,8 +199,9 @@ tr:hover td { background: rgba(88,166,255,.06); }
                 <div class="value" id="live-mem" style="font-size:22px">--</div>
             </div>
             <div class="card" style="flex:1;min-width:120px;padding:12px 16px">
-                <div class="label">连接数</div>
+                <div class="label">连接数 (实时)</div>
                 <div class="value" id="live-conn" style="font-size:22px">--</div>
+                <div class="sub" id="conn-note"></div>
             </div>
             <div class="card" style="flex:1;min-width:120px;padding:12px 16px">
                 <div class="label">在线终端</div>
@@ -811,14 +818,44 @@ async function loadTrendCharts(force) {
 
 async function loadLiveSysinfo() {
     var s = await apiFetch('/api/ikuai/sysinfo');
+    // 实时 WAN 会话数优先 (overview, 无采样滞后), 退化用采样值
+    var liveConn = (s.live_conn != null) ? s.live_conn : s.conn_num;
+    var sampledConn = s.conn_num;
+    var ageMin = (s.sysinfo_age != null) ? Math.round(s.sysinfo_age / 60) : null;
+    var stale = !!s.data_stale;
     if (!s.error && s.cpu != null) {
         document.getElementById('live-cpu').textContent = s.cpu + '%';
         document.getElementById('live-mem').textContent = s.mem + '%';
-        document.getElementById('live-conn').textContent = s.conn_num != null ? Math.round(s.conn_num) : '--';
-        document.getElementById('live-term').textContent = s.on_terminal != null ? Math.round(s.on_terminal) : '--';
+        document.getElementById('live-conn').textContent =
+            (liveConn != null) ? Math.round(liveConn).toLocaleString() : '--';
+        document.getElementById('live-term').textContent =
+            (s.on_terminal != null) ? Math.round(s.on_terminal) : '--';
+        // 滞后说明
+        var note = document.getElementById('conn-note');
+        if (stale) {
+            note.textContent = '采样 ' + (sampledConn != null ? Math.round(sampledConn).toLocaleString() : '?')
+                             + ' · 滞后 ' + ageMin + ' 分';
+            note.style.color = 'var(--orange)';
+        } else if (sampledConn != null) {
+            note.textContent = '采样 ' + Math.round(sampledConn).toLocaleString();
+            note.style.color = '';
+        } else {
+            note.textContent = '';
+        }
+        // 滞后横幅
+        var banner = document.getElementById('sysinfo-stale');
+        if (stale) {
+            banner.style.display = 'block';
+            banner.innerHTML = '⚠ 路由器 CPU/连接数为 <b>采样值</b>，已滞后约 <b>' + ageMin +
+                ' 分钟</b>（爱快约每 30~60 分钟才采样一次，曲线会暂时停在旧值）。' +
+                '当前 <b>实时 WAN 会话数 = ' +
+                (liveConn != null ? Math.round(liveConn).toLocaleString() : '?') + '</b>，可放心参考。';
+        } else {
+            banner.style.display = 'none';
+        }
         // 概览卡片
         var cn = document.getElementById('conn-num');
-        if (cn) cn.textContent = s.conn_num != null ? Math.round(s.conn_num).toLocaleString() : '--';
+        if (cn) cn.textContent = (liveConn != null) ? Math.round(liveConn).toLocaleString() : '--';
         var cw = document.getElementById('conn-wired');
         if (cw) cw.textContent = s.wired_terminal != null ? Math.round(s.wired_terminal) : '--';
         var cf = document.getElementById('conn-wifi');
@@ -828,6 +865,10 @@ async function loadLiveSysinfo() {
         document.getElementById('live-mem').textContent = '不可用';
         document.getElementById('live-conn').textContent = '--';
         document.getElementById('live-term').textContent = '--';
+        var note = document.getElementById('conn-note');
+        if (note) { note.textContent = ''; note.style.color = ''; }
+        var banner = document.getElementById('sysinfo-stale');
+        if (banner) banner.style.display = 'none';
         var cn = document.getElementById('conn-num');
         if (cn) cn.textContent = '--';
         var cw = document.getElementById('conn-wired');
