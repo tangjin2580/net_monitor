@@ -19,6 +19,7 @@ import http.server
 import os
 import signal
 import sys
+import time
 import threading
 from datetime import datetime
 
@@ -45,7 +46,38 @@ from web_handler import (                     # noqa: F401
 
 
 # ─── 主入口 ──────────────────────────────────────────────────────────
+def _pid_alive_and_ours(pid):
+    """进程是否存活且确实是 net_monitor_web (防止 PID 复用误杀)"""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            cmd = f.read().decode("utf-8", "replace")
+        if "net_monitor_web" not in cmd:
+            return False
+    except (IOError, OSError):
+        pass  # 读不到则信任 os.kill 的结果
+    return True
+
+
 def main():
+    # 单例保护: 启动前若已有活着的旧 web 实例, 先终止之。
+    # 否则重复实例会各自启动 history_recorder 线程, 重复打 iKuai API,
+    # 把路由器 NAT 会话连接数放大约 N 倍 (曾导致爱快 CPU 飙高)。
+    try:
+        with open(PID_FILE) as f:
+            _old = int(f.read().strip())
+    except (IOError, ValueError):
+        _old = None
+    if _old and _old != os.getpid() and _pid_alive_and_ours(_old):
+        try:
+            os.kill(_old, signal.SIGTERM)
+            print("[web] 终止旧 web 实例 PID %s" % _old)
+        except OSError:
+            pass
+        time.sleep(1)
     with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
     stats["web_start_time"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -92,7 +124,12 @@ def main():
 
     # 启动 HTTP 服务
     http.server.ThreadingHTTPServer.allow_reuse_address = True
-    server = http.server.ThreadingHTTPServer(('0.0.0.0', PORT), MonitorHandler)
+    # IPv6+IPv4 双栈 (bind to :: for dual-stack on Linux)
+    import socket
+    class DualStackServer(http.server.ThreadingHTTPServer):
+        address_family = socket.AF_INET6
+        allow_reuse_address = True
+    server = DualStackServer(('::', PORT), MonitorHandler)
     print(f"[web] 仪表盘启动: http://0.0.0.0:{PORT}")
     try:
         server.serve_forever()

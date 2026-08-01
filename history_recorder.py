@@ -6,12 +6,13 @@ history_recorder.py — 7天历史趋势记录器 (CPU/内存/网络延迟)
 import json
 import os
 import time
+import fcntl
 
 from config import (
     HISTORY_FILE, HISTORY_DAYS, HISTORY_INTERVAL,
     DATA_DIR, stats, stats_lock,
 )
-from ikuai_client import get_ikuai_sysinfo
+from ikuai_client import get_ikuai_sysinfo, get_ikuai_live_conn_cached
 
 
 def _rtt_to_float(val):
@@ -66,13 +67,23 @@ def _trim_file():
 
 def history_recorder():
     """后台线程: 每 HISTORY_INTERVAL 秒采集一次并落盘"""
+    # 单例保护: 整个机器只允许一个记录器在跑。否则 web 多实例时会重复写
+    # history.jsonl 并重复打 iKuai API, 把路由器 NAT 会话连接数放大约 N 倍,
+    # 正是之前"爱快 CPU 飙高"的元凶之一。文件锁在进程退出时自动释放, 安全。
+    try:
+        _lk = open("/tmp/net_monitor_hist.lock", "w")
+        fcntl.flock(_lk.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError) as e:
+        print("[history] 另一实例已持有记录锁, 本线程退出: %s" % e)
+        return
+
     print("[history] 历史记录器启动, 间隔=%ss, 保留=%s天, 文件=%s"
           % (HISTORY_INTERVAL, HISTORY_DAYS, HISTORY_FILE))
     trim_counter = 0
     while True:
         try:
             now = int(time.time())
-            # 1) 路由器 CPU/内存
+            # 1) 路由器 CPU/内存 (monitor_system 历史采样, 可能滞后 30~60 分钟)
             sysinfo = get_ikuai_sysinfo()
             cpu = sysinfo.get("cpu")
             mem = sysinfo.get("mem")
@@ -85,7 +96,10 @@ def history_recorder():
             except (ValueError, TypeError):
                 on_terminal = None
 
-            # 2) 当前 ping RTT (从全局 stats 读最新值)
+            # 2) 实时 WAN 会话数 (来自 overview, 当前值, 用于即时发现风暴)
+            live_conn = get_ikuai_live_conn_cached()
+
+            # 3) 当前 ping RTT (从全局 stats 读最新值)
             with stats_lock:
                 gw_rtt = _rtt_to_float(stats.get("gw_rtt"))
                 v4_rtt = _rtt_to_float(stats.get("v4_rtt"))
@@ -96,6 +110,7 @@ def history_recorder():
                 "cpu": cpu,
                 "mem": mem,
                 "conn": conn_num,
+                "live_conn": live_conn,
                 "gw_rtt": gw_rtt,
                 "v4_rtt": v4_rtt,
                 "v6_rtt": v6_rtt,
@@ -142,8 +157,9 @@ def read_history(days=HISTORY_DAYS, bucket_minutes=30):
                     b = buckets.setdefault(bkey, {
                         "cpu": [], "mem": [],
                         "gw_rtt": [], "v4_rtt": [], "v6_rtt": [],
+                        "live_conn": [],
                     })
-                    for k in ("cpu", "mem", "gw_rtt", "v4_rtt", "v6_rtt"):
+                    for k in ("cpu", "mem", "gw_rtt", "v4_rtt", "v6_rtt", "live_conn"):
                         v = rec.get(k)
                         if v is not None:
                             b[k].append(float(v))
@@ -152,11 +168,11 @@ def read_history(days=HISTORY_DAYS, bucket_minutes=30):
 
     # 排序并求平均
     out = {"labels": [], "cpu": [], "mem": [],
-           "gw_rtt": [], "v4_rtt": [], "v6_rtt": []}
+           "gw_rtt": [], "v4_rtt": [], "v6_rtt": [], "live_conn": []}
     for bkey in sorted(buckets.keys()):
         b = buckets[bkey]
         out["labels"].append(time.strftime("%m-%d %H:%M", time.localtime(bkey)))
-        for k in ("cpu", "mem", "gw_rtt", "v4_rtt", "v6_rtt"):
+        for k in ("cpu", "mem", "gw_rtt", "v4_rtt", "v6_rtt", "live_conn"):
             vals = b[k]
             out[k].append(round(sum(vals) / len(vals), 2) if vals else None)
 

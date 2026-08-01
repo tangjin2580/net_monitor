@@ -192,8 +192,53 @@ def refresh_wan_cache():
     return result
 
 
+def get_ikuai_live_conn():
+    """
+    实时 WAN 会话数（NAT 连接数）。
+    来源: overview 的 monitor_iface.iface_stream，是路由器**当前**值，
+    不像 monitor_system 历史采样那样滞后 30~60 分钟。
+    返回: int 或 None
+    """
+    try:
+        ov = get_ikuai_overview()
+        mi = ov.get("monitor_iface")
+        if not isinstance(mi, dict):
+            return None
+        stream = mi.get("iface_stream") or []
+        best = None
+        for it in stream:
+            name = str(it.get("interface", "")).lower()
+            if name.startswith("wan"):
+                cn = _to_num(it.get("connect_num"))
+                if cn is not None:
+                    # 优先 wan1；否则取第一个 wan
+                    if name == "wan1" or best is None:
+                        best = int(cn)
+        return best
+    except Exception:
+        return None
+
+
+# live_conn 短缓存 (overview 较重, 同进程内 30s 复用)
+_live_conn_cache = {"ts": 0, "data": None}
+
+
+def get_ikuai_live_conn_cached():
+    """带 30s 缓存的实时 WAN 会话数"""
+    global _live_conn_cache
+    now = time.time()
+    if _live_conn_cache["data"] is not None and (now - _live_conn_cache["ts"]) < 30:
+        return _live_conn_cache["data"]
+    val = get_ikuai_live_conn()
+    _live_conn_cache = {"ts": now, "data": val}
+    return val
+
+
 # ─── 路由器系统资源 (CPU/内存) ──────────────────────────────────────
 _sysinfo_logged = False
+# 30s 缓存: 降低 iKuai API 调用频率 (sysinfo 本就滞后 30~60 分钟, 短缓存无损)
+_sysinfo_cache = {"ts": 0, "data": None}
+_SYSINFO_CACHE_TTL = 30
 
 
 def _to_num(val):
@@ -219,10 +264,18 @@ def get_ikuai_sysinfo():
            "wired_terminal": int, "wireless_terminal": int,
            "mem_total": int|None, "uptime": int|None, "error": str|None}
     """
-    global _sysinfo_logged
+    global _sysinfo_logged, _sysinfo_cache
+    # 短缓存: 同一进程内 30s 内直接返回, 避免 web 每次请求都打 iKuai API
+    now = time.time()
+    if _sysinfo_cache["data"] is not None and (now - _sysinfo_cache["ts"]) < _SYSINFO_CACHE_TTL:
+        cached = dict(_sysinfo_cache["data"])
+        ts = cached.get("sysinfo_ts")
+        cached["sysinfo_age"] = int(now - ts) if ts else None
+        return cached
     result = {"cpu": None, "mem": None, "conn_num": None,
               "on_terminal": None, "wired_terminal": None, "wireless_terminal": None,
               "mem_total": None, "uptime": None,
+              "sysinfo_ts": None, "sysinfo_age": None,
               "error": None}
     try:
         r = ikuai_call("monitor_system", "show")
@@ -285,7 +338,15 @@ def get_ikuai_sysinfo():
             result["mem_total"] = round(mem_used_kb / (mem / 100.0))
 
         result["uptime"] = _to_num(src.get("uptime"))
+
+        # 采样时间戳 + 滞后秒数 (monitor_system 每 30~60 分钟才采样, 数值可能很旧)
+        _ts = _to_num(src.get("timestamp"))
+        result["sysinfo_ts"] = _ts
+        result["sysinfo_age"] = int(now - _ts) if _ts else None
         _sysinfo_logged = True
+
+        # 成功结果才缓存 (失败不缓存, 让下次立即重试)
+        _sysinfo_cache = {"ts": now, "data": result}
     except Exception as e:
         result["error"] = str(e)
     return result

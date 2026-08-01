@@ -16,7 +16,7 @@ MONITOR_CONF="${LOCAL_LOG_DIR:-/home/li/net_monitor_logs}/monitor_targets.json"
 IFACE="ens18"
 GW_V4="192.168.31.254"
 GW_V6="fe80::be24:11ff:fe03:4960%${IFACE}"
-INET_V4_TARGETS=("223.5.5.5" "119.29.29.29" "1.1.1.1")
+INET_V4_TARGETS=("223.6.6.6" "1.1.1.1")
 INET_V6_TARGETS=("2400:3200::1" "240e:ff:e020:99b:0:ff:b099:cff1")
 DNS_HOST="www.baidu.com"
 DIAG_RESOLVER="223.5.5.5"
@@ -88,7 +88,7 @@ _load_json_config() {
 _load_json_config "${MONITOR_CONF}"
 
 PING_INTERVAL=2
-PING_TIMEOUT=1
+PING_TIMEOUT=2
 ARP_INTERVAL=15
 ROUTE_INTERVAL=10
 EVENT_INTERVAL=5
@@ -176,6 +176,26 @@ SNAPSHOT_DIR="${LOG_DIR}/snapshots"
 
 # 重新初始化日志路径
 mkdir -p "$LOG_DIR" "$SNAPSHOT_DIR"
+
+# ─── 孤儿进程自清理: 启动前干掉仍在运行的旧实例 ────────────────────
+# 避免多次 restart (systemd / ctl / nohup) 叠加出多份监控 + ikuai_mon,
+# 曾导致连接数×N、爱快 NAT 表撑爆、CPU 飙高。仅当 /proc/PID/cmdline
+# 确为 net_monitor.sh 时才动手, 不误杀 PID 复用导致的无关进程。
+if [[ -f "$PID_FILE" ]]; then
+    _OLD_PID=$(cat "$PID_FILE" 2>/dev/null)
+    if [[ -n "$_OLD_PID" && "$_OLD_PID" != "$$" ]] && kill -0 "$_OLD_PID" 2>/dev/null; then
+        _OLD_CMD=$(tr '\0' ' ' < "/proc/$_OLD_PID/cmdline" 2>/dev/null)
+        if [[ "$_OLD_CMD" == *"net_monitor.sh"* ]]; then
+            echo "[SELF_CLEAN] 发现旧实例 PID=$_OLD_PID, 清理其子进程与主进程..." >&2
+            pkill -P "$_OLD_PID" 2>/dev/null || true   # 杀旧实例的直接子进程(监控 subshell + ikuai_mon)
+            kill "$_OLD_PID" 2>/dev/null || true
+            sleep 1
+            kill -9 "$_OLD_PID" 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+fi
+
 echo $$ > "$PID_FILE"
 
 # ─── 日志函数 (直接 >> 追加，避免 tee 子进程) ─────────────
@@ -742,6 +762,21 @@ lan_ping_check() {
 }
 
 # ─── 主 Ping 监控 (核心，含迟滞机制) ─────────────────────────────────────
+# TCP 连通性二次确认: 避免 ICMP 被运营商/目标限流导致误报断网
+# 用法: tcp_probe 4 | tcp_probe 6  -> 返回 0 表示 TCP 实际可达
+tcp_probe() {
+    local fam="$1"
+    local urls=("https://www.qq.com" "http://connectivitycheck.gstatic.com/generate_204")
+    for u in "${urls[@]}"; do
+        if [[ "$fam" == "6" ]]; then
+            curl -6 -s -o /dev/null -m 2 "$u" >/dev/null 2>&1 && return 0
+        else
+            curl -4 -s -o /dev/null -m 2 "$u" >/dev/null 2>&1 && return 0
+        fi
+    done
+    return 1
+}
+
 ping_monitor() {
     set +e
     log_info "[ping_monitor] v4 启动 (迟滞机制: OK=${HYSTERESIS_OK}, FAIL=${HYSTERESIS_FAIL})"
@@ -773,6 +808,7 @@ ping_monitor() {
             gw_ok=$((gw_ok + 1))
             loss_window[$loss_idx]=0
             _HYST_GW_FAIL=0
+            gw_fail=0
 
             # 迟滞: 需要连续 N 次成功才确认恢复
             if $gw_down; then
@@ -819,6 +855,7 @@ ping_monitor() {
             last_v4_rtt="$v4_rtt"
             v4_ok=$((v4_ok + 1))
             _HYST_V4_FAIL=0
+            v4_fail=0
 
             if $v4_down; then
                 _HYST_V4_OK=$((_HYST_V4_OK + 1))
@@ -836,6 +873,10 @@ ping_monitor() {
             _HYST_V4_OK=0
 
             if (( v4_fail >= FAIL_THRESHOLD )) && ! $v4_down; then
+                if tcp_probe 4; then
+                    log_warn "[V4_ICMP_ONLY] ICMP 丢包但 TCP 可达 ($v4_target), 疑似 ICMP 限流, 暂不报警"
+                    v4_fail=0
+                else
                 v4_down=true
                 v4_down_since=$(date '+%Y-%m-%d %H:%M:%S')
                 disc_events=$((disc_events + 1))
@@ -847,6 +888,7 @@ ping_monitor() {
                     log_err "[V4_DOWN] IPv4 外网断开 ($v4_target) #$disc_events"
                     send_webhook "IPv4 断连" "IPv4 外网断开! 目标: $v4_target" "critical" "v4_down"
                     take_disconnect_snapshot "all"
+                fi
                 fi
             elif $v4_down && (( v4_fail % 5 == 0 )); then
                 if ! $v6_down; then
@@ -867,6 +909,7 @@ ping_monitor() {
             last_v6_rtt="$v6_rtt"
             v6_ok=$((v6_ok + 1))
             _HYST_V6_FAIL=0
+            v6_fail=0
 
             if $v6_down; then
                 _HYST_V6_OK=$((_HYST_V6_OK + 1))
@@ -884,6 +927,10 @@ ping_monitor() {
             _HYST_V6_OK=0
 
             if (( v6_fail >= FAIL_THRESHOLD )) && ! $v6_down; then
+                if tcp_probe 6; then
+                    log_warn "[V6_ICMP_ONLY] ICMP 丢包但 TCP 可达 ($v6_target), 疑似 ICMP 限流, 暂不报警"
+                    v6_fail=0
+                else
                 v6_down=true
                 v6_down_since=$(date '+%Y-%m-%d %H:%M:%S')
                 if $v4_down; then
@@ -893,6 +940,7 @@ ping_monitor() {
                     log_err "[V6_DOWN_V4_ALIVE] IPv6 断开但 IPv4 正常! ($v6_target)"
                     send_webhook "IPv6 断连" "IPv6 断开但 IPv4 正常! $v6_target" "critical" "v6_down_v4_alive"
                     take_disconnect_snapshot "v6_only"
+                fi
                 fi
             elif $v6_down && (( v6_fail % 5 == 0 )); then
                 log_warn "[V6_STILL_DOWN] IPv6 仍断, 失败 ${v6_fail} 次"
