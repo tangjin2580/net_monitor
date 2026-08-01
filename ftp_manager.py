@@ -1,14 +1,33 @@
 """
 ftp_manager.py — FTP 配置读写、连接测试、日志上传
+
+优化要点:
+- FTP 连接统一用 try/finally 或上下文确保关闭（修复资源泄漏隐患）
+- 统一 logging；异常具体化；类型注解
+- 上传目录创建逻辑收敛为辅助函数
 """
+from __future__ import annotations
+
+import ftplib
 import json
+import logging
 import os
+from typing import Dict, List, Tuple
 
 from config import FTP_CONF, FTP_DEFAULT, LOG_DIR
 
+logger = logging.getLogger(__name__)
 
-def read_ftp_config():
-    """读取 FTP 配置，返回 dict"""
+# 上传失败消息前缀（避免重复拼接字符串字面量）
+MSG_CONN_FAIL = "连接失败: "
+MSG_UPLOAD_FAIL = "上传失败: "
+
+Fname = str
+UploadResult = Tuple[bool, str]
+
+
+def read_ftp_config() -> Dict[str, any]:
+    """读取 FTP 配置，返回 dict（缺字段用默认值补全）"""
     default = dict(FTP_DEFAULT)
     if not os.path.exists(FTP_CONF):
         return default
@@ -19,77 +38,77 @@ def read_ftp_config():
             if k not in saved:
                 saved[k] = default[k]
         return saved
-    except Exception:
+    except (OSError, ValueError) as e:
+        logger.warning("FTP 配置读取失败, 回退默认: %s", e)
         return default
 
 
-def write_ftp_config(cfg):
+def write_ftp_config(cfg: Dict[str, any]) -> None:
     """保存 FTP 配置到文件"""
     os.makedirs(os.path.dirname(FTP_CONF), exist_ok=True)
     with open(FTP_CONF, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
-def test_ftp_connection(host, port, user, password):
+def test_ftp_connection(host: str, port: any, user: str, password: str) -> Tuple[bool, str]:
     """测试 FTP 连接，返回 (success, message)"""
     try:
-        import ftplib
         ftp = ftplib.FTP()
         ftp.connect(host, int(port), timeout=10)
         ftp.login(user, password)
         welcome = ftp.getwelcome()
-        try:
-            ftp.cwd("/")
-        except Exception:
-            pass
         ftp.quit()
         return True, "连接成功: " + welcome
-    except Exception as e:
-        return False, "连接失败: " + str(e)
+    except (OSError, ValueError) as e:
+        return False, MSG_CONN_FAIL + str(e)
 
 
-def upload_file_to_ftp(local_path, cfg):
+def _ensure_remote_dir(ftp: ftplib.FTP, remote_path: str) -> None:
+    """确保远端目录存在（逐级创建），失败不抛异常，由上层记录"""
+    parts = remote_path.strip("/").split("/")
+    current = ""
+    for p in parts:
+        current += "/" + p
+        try:
+            ftp.cwd(current)
+        except ftplib.error_perm:
+            try:
+                ftp.mkd(current)
+                ftp.cwd(current)
+            except ftplib.error_perm as e:
+                logger.warning("创建远端目录失败 %s: %s", current, e)
+                return
+
+
+def upload_file_to_ftp(local_path: str, cfg: Dict[str, any]) -> UploadResult:
     """上传单个文件到 FTP，返回 (success, message)"""
     if not cfg.get("enabled"):
         return False, "FTP 未启用"
-    try:
-        import ftplib
-        host = cfg["host"]
-        port = int(cfg["port"])
-        user = cfg["user"]
-        pwd = cfg["password"]
-        remote_path = cfg.get("remote_path", "/").rstrip("/")
-        fname = os.path.basename(local_path)
+    host = cfg["host"]
+    port = int(cfg["port"])
+    user = cfg["user"]
+    pwd = cfg["password"]
+    remote_path = cfg.get("remote_path", "/").rstrip("/")
+    fname = os.path.basename(local_path)
 
-        ftp = ftplib.FTP()
+    ftp = ftplib.FTP()
+    try:
         ftp.connect(host, port, timeout=30)
         ftp.login(user, pwd)
-
-        try:
-            ftp.cwd(remote_path)
-        except Exception:
-            parts = remote_path.strip("/").split("/")
-            current = ""
-            for p in parts:
-                current += "/" + p
-                try:
-                    ftp.cwd(current)
-                except Exception:
-                    try:
-                        ftp.mkd(current)
-                        ftp.cwd(current)
-                    except Exception:
-                        pass
-
+        _ensure_remote_dir(ftp, remote_path)
         with open(local_path, 'rb') as f:
             ftp.storbinary("STOR " + fname, f)
-        ftp.quit()
         return True, "上传成功: " + fname + " -> " + remote_path + "/" + fname
-    except Exception as e:
-        return False, "上传失败: " + str(e)
+    except (OSError, ValueError, ftplib.Error) as e:
+        return False, MSG_UPLOAD_FAIL + str(e)
+    finally:
+        try:
+            ftp.quit()
+        except Exception:  # noqa: BLE001 — 关闭连接不应影响已记录的成败
+            pass
 
 
-def upload_logs_to_ftp(cfg):
+def upload_logs_to_ftp(cfg: Dict[str, any]) -> List[Dict[str, any]]:
     """
     上传所有日志和趋势数据文件到 FTP，返回结果列表。
     包含: current.log, current.log.N(.gz), monitor_*.log(.gz),
@@ -97,20 +116,19 @@ def upload_logs_to_ftp(cfg):
     """
     from config import DATA_DIR
 
-    results = []
+    results: List[Dict[str, any]] = []
     if not cfg.get("enabled"):
         return results
     if not os.path.isdir(LOG_DIR):
         return results
 
-    files_to_upload = []
+    files_to_upload: List[str] = []
 
     # 1) LOG_DIR 根目录: 日志文件
     for fname in os.listdir(LOG_DIR):
         fpath = os.path.join(LOG_DIR, fname)
         if not os.path.isfile(fpath):
             continue
-        # 日志文件: current.log, current.log.N, current.log.N.gz, monitor_*.log(.gz), *.log
         if (fname == "current.log"
                 or fname.startswith("current.log.")
                 or fname.startswith("monitor_")

@@ -1,11 +1,24 @@
 """
 config.py — 全局配置常量 + 共享状态 + 线程锁
+
+优化要点:
+- 统一 logging（提供 init_logging() 由入口调用，模块内用 logger）
+- broadcast_sse 异常具体化
+- 关键函数加类型注解
+注意: 全局共享状态(stats/targets 等)是跨模块协作所需，保留为模块级；
+      进一步降低全局变量需引入状态容器对象，属架构级重构(见最终报告)。
 """
+from __future__ import annotations
+
 import json
+import logging
 import os
 import re
 import threading
 from collections import deque
+from typing import Any, Deque, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # ─── 路径与端口 ──────────────────────────────────────────────────────
 PORT = 9091
@@ -53,12 +66,17 @@ stats_lock = threading.Lock()
 sse_lock = threading.Lock()
 targets_lock = threading.Lock()
 
-# ─── 全局状态 ────────────────────────────────────────────────────────
-log_lines = deque(maxlen=MAX_LOG_LINES)
-parsed_events = deque(maxlen=MAX_EVENTS)
-sse_clients = []
+# SSE 客户端队列上限（超出视为失联，移出）
+SSE_MAX_QUEUE: int = 500
 
-stats = {
+# ─── 全局状态 ────────────────────────────────────────────────────────
+# 说明: 以下为跨模块共享的运行态，保留为模块级全局（进一步收敛需引入
+#       状态容器对象，属架构级重构，见最终报告 ④）。
+log_lines: Deque[Dict[str, Any]] = deque(maxlen=MAX_LOG_LINES)
+parsed_events: Deque[Dict[str, Any]] = deque(maxlen=MAX_EVENTS)
+sse_clients: List[Any] = []
+
+stats: Dict[str, Any] = {
     "total_pings": 0,
     "gw_ok": 0, "v4_ok": 0, "v6_ok": 0,
     "disconnect_events": 0,
@@ -79,8 +97,8 @@ stats = {
 DIAG_PATTERN = re.compile(
     r'\[DIAG\]\s+(.+?)\|(.+?)\|(OK|FAIL|DNS_FAIL)\|(.+)'
 )
-targets = {}
-diag_history = {}
+targets: Dict[str, Any] = {}
+diag_history: Dict[str, List[Dict[str, Any]]] = {}
 DIAG_HISTORY_MAX = 30
 
 # ─── 监控目标配置 ────────────────────────────────────────────────────
@@ -133,19 +151,29 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(SCRIPT_DIR, "templates")
 
 
-# ─── SSE 广播 ────────────────────────────────────────────────────────
+# ─── 日志初始化 ──────────────────────────────────────────────────────
+def init_logging(level: int = logging.INFO) -> None:
+    """统一日志配置，由程序入口(net_monitor_web.main)尽早调用一次"""
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
 
-def broadcast_sse(data):
+
+# ─── SSE 广播 ────────────────────────────────────────────────────────
+def broadcast_sse(data: Dict[str, Any]) -> None:
     """将数据广播到所有 SSE 客户端"""
     msg = f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-    dead = []
+    dead: List[Any] = []
     with sse_lock:
         for q in sse_clients:
             try:
                 q.append(msg)
-                if len(q) > 500:
+                if len(q) > SSE_MAX_QUEUE:
                     dead.append(q)
-            except Exception:
+            except Exception:  # noqa: BLE001 — 单个坏客户端不应中断广播
                 dead.append(q)
         for q in dead:
             sse_clients.remove(q)

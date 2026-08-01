@@ -15,7 +15,6 @@ content = content.replace(
 # 找到起始位置（# ─── 爱快路由器集成 ─）
 start_marker = "# ─── 爱快路由器集成 ──────────────────────────────────────────────"
 # 找到结束位置（下一个 # ─── 开头的行）
-import re
 start_idx = content.find(start_marker)
 if start_idx == -1:
     print("找不到起始标记！")

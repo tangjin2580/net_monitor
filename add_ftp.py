@@ -382,7 +382,7 @@ loadConfig();
 </script>
 </body>
 </html>
-\'''
+'''
 
 # 在 WEBHOOK_HTML = r''' 之前插入 FTP_HTML
 # 先找到 WEBHOOK_HTML 的位置，在其前面插入

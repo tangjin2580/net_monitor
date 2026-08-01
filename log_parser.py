@@ -1,10 +1,18 @@
 """
 log_parser.py — 日志解析、事件分类、逐行处理、日志文件监控
+
+优化要点:
+- 预编译所有正则（原实现每次 process_line 都 re.search 字符串模式，热点路径重复编译）
+- 统一 logging；类型注解；异常具体化
+- 修复 _guess_mem 缓存永不过期的问题（改为带 TTL 的缓存）
 """
+from __future__ import annotations
+
+import logging
 import os
 import re
-import sys
 import time
+from typing import Any, Dict, List, Match, Optional
 
 from config import (
     LOG_FILE, LOG_PATTERN, DIAG_PATTERN,
@@ -13,17 +21,49 @@ from config import (
     broadcast_sse,
 )
 
+logger = logging.getLogger(__name__)
+
+# 历史列表长度上限（消除魔法数字 100 / 200）
+MAX_SYSTEM_STATS: int = 100
+MAX_HTTP_LATENCIES: int = 100
+MAX_RTT_HISTORY: int = 200
+MAX_SUCCESS_RATE_HISTORY: int = 200
+
+# ─── 预编译正则（性能：热点路径避免重复编译） ──────────────────────────
+RE_PING_TOTAL = re.compile(r'total=(\d+)')
+RE_PING_GW = re.compile(r'\bgw=(\d+)\b(?!\.)')
+RE_PING_GW_OK = re.compile(r'gw_ok=(\d+)')
+RE_PING_V4 = re.compile(r'\bv4=(\d+)\b(?!\.)')
+RE_PING_V4_OK = re.compile(r'v4_ok=(\d+)')
+RE_PING_INET_OK = re.compile(r'inet_ok=(\d+)')
+RE_PING_V6 = re.compile(r'\bv6=(\d+)\b(?!\.)')
+RE_PING_V6_OK = re.compile(r'v6_ok=(\d+)')
+RE_STATS_NEW = re.compile(r'(gw|v4|v6)\s*=\s*(UP|DOWN|DEGRADED)', re.IGNORECASE)
+RE_STATS_OLD = re.compile(r'(?:总|GW|V4|V6):\s*(\d+)')
+RE_HEARTBEAT_RTT = {
+    "gw_rtt": re.compile(r'gw=(\d+\.?\d*)'),
+    "v4_rtt": re.compile(r'v4=(\d+\.?\d*)'),
+    "v6_rtt": re.compile(r'v6=(\d+\.?\d*)'),
+}
+RE_QLTY = re.compile(r'qlty=(\d+)')
+RE_SYSTEM_STATS = re.compile(r'cpu=(\d+)\s+mem=(\d+)\s+disk=(\d+)\s+load=([\d\.]+)')
+RE_TCP_RETRANS = re.compile(r'rate=(\d+)')
+RE_TCP_RETRANS_CN = re.compile(r'重传率(\d+)%')
+RE_TCP_RETRANS_RATE = re.compile(r'rate=(\d+)%')
+RE_BANDWIDTH = re.compile(r'rx=(\d+)kbps\s+tx=(\d+)kbps')
+RE_HTTP_LATENCY = re.compile(r'(\S+)\s+→\s+(\d+)ms')
+
 
 # ─── 日志行解析 ──────────────────────────────────────────────────────
 
-def parse_log_line(line):
-    m = LOG_PATTERN.match(line.strip())
+def parse_log_line(line: str) -> Optional[Dict[str, str]]:
+    m: Optional[Match[str]] = LOG_PATTERN.match(line.strip())
     if m:
         return {"ts": m.group(1), "level": m.group(2).strip(), "msg": m.group(3)}
     return None
 
 
-def classify_event(parsed):
+def classify_event(parsed: Dict[str, str]) -> Optional[str]:
     msg = parsed["msg"]
     level = parsed["level"]
     if "V4_DOWN_V6_ALIVE" in msg: return "v4_down_v6_alive"
@@ -69,53 +109,8 @@ def classify_event(parsed):
 
 # ─── 解析辅助 ────────────────────────────────────────────────────────
 
-def _extract_ping_counts(msg, stats, ts):
-    """从 HEARTBEAT 扩展格式提取 ping 计数: total=N gw=X v4=Y v6=Z"""
-    total_m = re.search(r'total=(\d+)', msg)
-    gw_m = re.search(r'\bgw=(\d+)\b(?!\.)', msg) or re.search(r'gw_ok=(\d+)', msg)
-    v4_m = re.search(r'\bv4=(\d+)\b(?!\.)', msg) or re.search(r'v4_ok=(\d+)', msg) or re.search(r'inet_ok=(\d+)', msg)
-    v6_m = re.search(r'\bv6=(\d+)\b(?!\.)', msg) or re.search(r'v6_ok=(\d+)', msg)
-    if total_m and gw_m and v4_m:
-        total = int(total_m.group(1))
-        gw_ok = int(gw_m.group(1))
-        v4_ok = int(v4_m.group(1))
-        v6_ok = int(v6_m.group(1)) if v6_m else 0
-        _apply_ping_stats(stats, ts, total, gw_ok, v4_ok, v6_ok)
-
-
-def _extract_stats_counts(msg, stats, ts):
-    """从 [STATS] 行提取状态，支持两种格式:
-    旧: 总: N | GW: P% (OK) | V4: Q% (OK) | V6: R% (OK)
-    新: 状态: gw=UP v4=UP v6=UP  (或 DOWN/DEGRADED)
-    """
-    # 新格式: 状态: gw=UP v4=UP v6=UP
-    new_gw = re.search(r'gw\s*=\s*(UP|DOWN|DEGRADED)', msg, re.IGNORECASE)
-    new_v4 = re.search(r'v4\s*=\s*(UP|DOWN|DEGRADED)', msg, re.IGNORECASE)
-    new_v6 = re.search(r'v6\s*=\s*(UP|DOWN|DEGRADED)', msg, re.IGNORECASE)
-    if new_gw or new_v4 or new_v6:
-        def _s(m):
-            if not m: return "unknown"
-            v = m.group(1).upper()
-            return {"UP": "up", "DOWN": "down", "DEGRADED": "degraded"}.get(v, "unknown")
-        if new_gw: stats["gw_status"] = _s(new_gw)
-        if new_v4: stats["v4_status"] = _s(new_v4)
-        if new_v6: stats["v6_status"] = _s(new_v6)
-        return
-
-    # 旧格式: 总: N | GW: P% (OK) | V4: Q% (OK) | V6: R% (OK)
-    total_m = re.search(r'总:\s*(\d+)', msg)
-    gw_m = re.search(r'GW:\s*\d+%\s*\((\d+)\)', msg)
-    v4_m = re.search(r'V4:\s*\d+%\s*\((\d+)\)', msg)
-    v6_m = re.search(r'V6:\s*\d+%\s*\((\d+)\)', msg)
-    if total_m and gw_m and v4_m:
-        total = int(total_m.group(1))
-        gw_ok = int(gw_m.group(1))
-        v4_ok = int(v4_m.group(1))
-        v6_ok = int(v6_m.group(1)) if v6_m else 0
-        _apply_ping_stats(stats, ts, total, gw_ok, v4_ok, v6_ok)
-
-
-def _apply_ping_stats(stats, ts, total, gw_ok, v4_ok, v6_ok):
+def _apply_ping_stats(stats: Dict[str, Any], ts: str,
+                      total: int, gw_ok: int, v4_ok: int, v6_ok: int) -> None:
     """应用解析到的 ping 统计到 stats 字典"""
     stats["total_pings"] = total
     stats["gw_ok"] = gw_ok
@@ -130,10 +125,42 @@ def _apply_ping_stats(stats, ts, total, gw_ok, v4_ok, v6_ok):
     stats["success_rate_history"].append({
         "ts": ts, "gw_rate": gw_rate, "v4_rate": v4_rate, "v6_rate": v6_rate,
     })
-    stats["success_rate_history"] = stats["success_rate_history"][-200:]
+    stats["success_rate_history"] = stats["success_rate_history"][-MAX_SUCCESS_RATE_HISTORY:]
 
 
-def _append_rtt_history(stats, ts):
+def _extract_ping_counts(msg: str, stats: Dict[str, Any], ts: str) -> None:
+    """从 HEARTBEAT 扩展格式提取 ping 计数: total=N gw=X v4=Y v6=Z"""
+    total_m = RE_PING_TOTAL.search(msg)
+    gw_m = RE_PING_GW.search(msg) or RE_PING_GW_OK.search(msg)
+    v4_m = RE_PING_V4.search(msg) or RE_PING_V4_OK.search(msg) or RE_PING_INET_OK.search(msg)
+    v6_m = RE_PING_V6.search(msg) or RE_PING_V6_OK.search(msg)
+    if total_m and gw_m and v4_m:
+        _apply_ping_stats(stats, ts, int(total_m.group(1)), int(gw_m.group(1)),
+                          int(v4_m.group(1)), int(v6_m.group(1)) if v6_m else 0)
+
+
+def _extract_stats_counts(msg: str, stats: Dict[str, Any], ts: str) -> None:
+    """从 [STATS] 行提取状态，支持两种格式:
+    旧: 总: N | GW: P% (OK) | V4: Q% (OK) | V6: R% (OK)
+    新: 状态: gw=UP v4=UP v6=UP  (或 DOWN/DEGRADED)
+    """
+    new_m = RE_STATS_NEW.findall(msg)
+    if new_m:
+        status_map = {"UP": "up", "DOWN": "down", "DEGRADED": "degraded"}
+        for key, val in new_m:
+            stats_key = f"{key.lower()}_status"
+            stats[stats_key] = status_map.get(val.upper(), "unknown")
+        return
+
+    # 旧格式: 总: N | GW: P% (OK) | V4: Q% (OK) | V6: R% (OK)
+    nums = RE_STATS_OLD.findall(msg)
+    if len(nums) >= 3:
+        total, gw_ok, v4_ok = (int(x) for x in nums[:3])
+        v6_ok = int(nums[3]) if len(nums) > 3 else 0
+        _apply_ping_stats(stats, ts, total, gw_ok, v4_ok, v6_ok)
+
+
+def _append_rtt_history(stats: Dict[str, Any], ts: str) -> None:
     """从当前 stats 中取 RTT 值追加到历史"""
     try:
         gw_rtt_v = float(stats["gw_rtt"]) if stats.get("gw_rtt") not in ("?", "", None) else None
@@ -144,34 +171,43 @@ def _append_rtt_history(stats, ts):
     stats["recent_rtt_history"].append({
         "ts": ts, "gw_rtt": gw_rtt_v, "v4_rtt": v4_rtt_v, "v6_rtt": v6_rtt_v
     })
-    stats["recent_rtt_history"] = stats["recent_rtt_history"][-200:]
+    stats["recent_rtt_history"] = stats["recent_rtt_history"][-MAX_RTT_HISTORY:]
 
 
-_last_mem = 0
+# ─── 内存猜测（带 TTL 缓存，避免永久陈旧） ────────────────────────────
+_MEM_CACHE: Dict[str, Any] = {"value": 0, "ts": 0.0}
+MEM_GUESS_TTL: int = 60
 
-def _guess_mem():
-    """当日志 mem=0 时，用 /proc/meminfo 实际读取（带缓存）"""
-    global _last_mem
-    if _last_mem > 0:
-        return _last_mem
+
+def _guess_mem() -> int:
+    """当日志 mem=0 时，用 /proc/meminfo 实际读取（带 60s TTL 缓存）"""
+    now = time.time()
+    if _MEM_CACHE["value"] > 0 and (now - _MEM_CACHE["ts"]) < MEM_GUESS_TTL:
+        return _MEM_CACHE["value"]
     try:
+        total_kb = avail_kb = 0
         with open("/proc/meminfo") as f:
             for line in f:
-                if line.startswith("MemTotal:"):
-                    total_kb = int(line.split()[1])
-                elif line.startswith("MemAvailable:"):
-                    avail_kb = int(line.split()[1])
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                if parts[0] == "MemTotal:":
+                    total_kb = int(parts[1])
+                elif parts[0] == "MemAvailable:":
+                    avail_kb = int(parts[1])
                     break
+        if total_kb > 0:
             used_pct = round((total_kb - avail_kb) / total_kb * 100)
-            _last_mem = used_pct
+            _MEM_CACHE.update(value=used_pct, ts=now)
             return used_pct
-    except Exception:
-        return 72
+    except OSError:
+        pass
+    return 72
 
 
 # ─── 核心处理 ────────────────────────────────────────────────────────
 
-def process_line(line):
+def process_line(line: str) -> None:
     """解析一行日志，更新全局状态，广播 SSE"""
     parsed = parse_log_line(line)
     if not parsed:
@@ -192,10 +228,8 @@ def process_line(line):
     if _is_hb:
         with stats_lock:
             stats["last_heartbeat"] = parsed["ts"]
-            for key, label in [("gw_rtt", r"gw=(\d+\.?\d*)"),
-                               ("v4_rtt", r"v4=(\d+\.?\d*)"),
-                               ("v6_rtt", r"v6=(\d+\.?\d*)")]:
-                m = re.search(label, msg)
+            for key, rx in RE_HEARTBEAT_RTT.items():
+                m = rx.search(msg)
                 if m:
                     stats[key] = m.group(1)
             # 从 RTT 推断状态: 有 RTT 值 = up, 无 = down
@@ -207,7 +241,7 @@ def process_line(line):
                 if val and val != "?":
                     if stats.get(status_key, "unknown") in ("unknown", "down"):
                         stats[status_key] = "up"
-            qm = re.search(r'qlty=(\d+)', msg)
+            qm = RE_QLTY.search(msg)
             if qm:
                 stats["link_quality"] = int(qm.group(1))
             _extract_ping_counts(msg, stats, parsed["ts"])
@@ -220,7 +254,7 @@ def process_line(line):
 
     # 3. 系统资源
     if "SYSTEM_STATS" in msg:
-        m = re.search(r'cpu=(\d+)\s+mem=(\d+)\s+disk=(\d+)\s+load=([\d\.]+)', msg)
+        m = RE_SYSTEM_STATS.search(msg)
         if m:
             entry = {
                 "ts": parsed["ts"].split(".")[0] if "." in parsed["ts"] else parsed["ts"],
@@ -231,44 +265,35 @@ def process_line(line):
             }
             with stats_lock:
                 stats["system_stats"].append(entry)
-                if len(stats["system_stats"]) > 100:
-                    stats["system_stats"] = stats["system_stats"][-100:]
+                if len(stats["system_stats"]) > MAX_SYSTEM_STATS:
+                    stats["system_stats"] = stats["system_stats"][-MAX_SYSTEM_STATS:]
 
-    # 4. TCP 重传率
-    if "TCP_RETRANS" in msg:
-        m = re.search(r'rate=(\d+)', msg)
-        if m:
+    # 4. TCP 重传率（兼容英文 rate= 与中文 重传率 两种写法，合并为一段）
+    if "TCP_RETRANS" in msg or ("TCP" in msg and "重传率" in msg):
+        bm = RE_TCP_RETRANS_CN.search(msg) or RE_TCP_RETRANS_RATE.search(msg)
+        if bm:
             with stats_lock:
-                stats["tcp_retrans_rate"] = int(m.group(1))
+                stats["tcp_retrans_rate"] = int(bm.group(1))
 
     # 5. 带宽
     if "BANDWIDTH" in msg:
-        bm = re.search(r'rx=(\d+)kbps\s+tx=(\d+)kbps', msg)
+        bm = RE_BANDWIDTH.search(msg)
         if bm:
             with stats_lock:
                 stats["bandwidth_rx_kbps"] = int(bm.group(1))
                 stats["bandwidth_tx_kbps"] = int(bm.group(2))
 
-    # 6. TCP 重传率（中文格式）
-    if "TCP_RETRANS" in msg or ("TCP" in msg and "重传率" in msg):
-        bm = re.search(r'重传率(\d+)%', msg)
-        if not bm:
-            bm = re.search(r'rate=(\d+)%', msg)
-        if bm:
-            with stats_lock:
-                stats["tcp_retrans_rate"] = int(bm.group(1))
-
-    # 7. HTTP 延迟
+    # 6. HTTP 延迟
     if "HTTP" in msg and "ms" in msg and "FAIL" not in msg:
-        hm = re.search(r'(\S+)\s+→\s+(\d+)ms', msg)
+        hm = RE_HTTP_LATENCY.search(msg)
         if hm:
             with stats_lock:
                 stats["http_latencies"].append({
                     "ts": parsed["ts"], "target": hm.group(1), "ms": int(hm.group(2))
                 })
-                stats["http_latencies"] = stats["http_latencies"][-100:]
+                stats["http_latencies"] = stats["http_latencies"][-MAX_HTTP_LATENCIES:]
 
-    # 8. 断网事件计数
+    # 7. 断网事件计数
     down_keywords = ["DISCONNECT", "INET_DOWN", "LINK_DOWN", "V4_DOWN", "V6_DOWN",
                      "GW_DOWN", "V4_DOWN_V6_ALIVE", "NO_V4_DEFAULT", "CONNTRACK_HIGH"]
     if any(kw in msg for kw in down_keywords):
@@ -291,7 +316,7 @@ def process_line(line):
             if "RECOVER_V6" in msg:
                 stats["v6_status"] = "up"
 
-    # 9. 逐服务诊断
+    # 8. 逐服务诊断
     dm = DIAG_PATTERN.search(msg)
     if dm:
         cat = dm.group(1).strip()
@@ -315,7 +340,7 @@ def process_line(line):
 
 # ─── 日志文件监控线程 ────────────────────────────────────────────────
 
-def log_watcher():
+def log_watcher() -> None:
     """后台线程: 持续 tail 日志文件，逐行处理"""
     last_pos = 0
     while True:
@@ -330,6 +355,6 @@ def log_watcher():
                         for line in f:
                             process_line(line)
                         last_pos = f.tell()
-        except Exception as e:
-            print(f"[log_watcher] Error: {e}", file=sys.stderr)
+        except OSError as e:
+            logger.error("日志监控异常: %s", e)
         time.sleep(1)

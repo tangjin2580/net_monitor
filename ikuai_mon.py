@@ -10,9 +10,20 @@ ikuai_mon.py — 爱快路由器监控脚本（纯标准库，增强版 v2）
   python3 ikuai_mon.py --arp        # 输出 ARP 表 JSON
   python3 ikuai_mon.py --all        # 输出所有数据 JSON
 """
-import json, hashlib, time, sys, argparse, urllib.request, urllib.error
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import logging
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from http.cookiejar import CookieJar, Cookie
-from datetime import datetime, timezone, timedelta
+
+logger = logging.getLogger(__name__)
 
 IKUAI_HOST     = "192.168.31.254"
 IKUAI_USER     = "admin"
@@ -20,14 +31,20 @@ IKUAI_PASS     = "lixin2324"
 IKUAI_LOGIN    = f"http://{IKUAI_HOST}/Action/login"
 IKUAI_API      = f"http://{IKUAI_HOST}/Action/call"
 
+# ─── 可调常量（原先散落为魔法数字）────────────────────────────────────────
+LOGIN_CACHE_SECONDS = 300    # 登录会话缓存有效期(秒)
+REQUEST_TIMEOUT     = 10     # 单次 HTTP 请求超时(秒)
+MONITOR_INTERVAL    = 15     # 持续监控模式轮询间隔(秒)
+MS_TIMESTAMP_THRESHOLD = 1_000_000_000_000  # 大于此值视为毫秒时间戳
+
 # 全局 cookie jar
 _jar        = None
 _last_login = 0
 
-def ensure_login():
+def ensure_login() -> bool:
     global _jar, _last_login
     now = time.time()
-    if _jar and (_last_login > 0) and (now - _last_login < 300):
+    if _jar and (_last_login > 0) and (now - _last_login < LOGIN_CACHE_SECONDS):
         return True
     _jar = CookieJar()
     passwd_md5 = hashlib.md5(IKUAI_PASS.encode()).hexdigest()
@@ -43,9 +60,10 @@ def ensure_login():
         method="POST"
     )
     try:
-        with opener.open(req, timeout=10) as resp:
+        with opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
             d = json.loads(resp.read())
             if d.get("code") != 0:
+                logger.warning("爱快登录返回非 0 状态码: %s", d.get("code"))
                 return False
         for name, val in [("username", IKUAI_USER), ("login", "1")]:
             _jar.set_cookie(Cookie(
@@ -56,10 +74,11 @@ def ensure_login():
             ))
         _last_login = now
         return True
-    except Exception:
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        logger.error("爱快登录失败: %s", exc)
         return False
 
-def ikuai_call(func_name, action="show", param=None):
+def ikuai_call(func_name: str, action: str = "show", param: dict | None = None) -> dict:
     if not ensure_login():
         return {"error": "登录失败"}
     passwd_md5 = hashlib.md5(IKUAI_PASS.encode()).hexdigest()
@@ -81,30 +100,30 @@ def ikuai_call(func_name, action="show", param=None):
         method="POST"
     )
     try:
-        with opener.open(req, timeout=10) as resp:
+        with opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
             return json.loads(resp.read())
-    except Exception as e:
+    except (urllib.error.URLError, OSError, ValueError) as e:
         return {"error": str(e)}
 
 # ─── 时间转换辅助 ────────────────────────────────────────────────────────────
 
-def _ts_to_str(ts):
+def _ts_to_str(ts: object) -> str:
     """将爱快时间戳（秒）转为可读字符串"""
     try:
         ts_int = int(ts)
         # 爱快时间戳可能是从2020-01-01起的秒数，或直接是Unix时间戳
-        # 尝试判断：如果 > 1e10 则是毫秒，如果在 1.5e9~2e9 之间则是Unix时间戳
-        if ts_int > 1_000_000_000_000:
+        # 尝试判断：如果 > 阈值 则是毫秒，否则为秒级 Unix 时间戳
+        if ts_int > MS_TIMESTAMP_THRESHOLD:
             ts_int //= 1000
         # 尝试作为 Unix 时间戳
         dt = datetime.fromtimestamp(ts_int, tz=timezone(timedelta(hours=8)))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
+    except (ValueError, OSError, OverflowError):
         return str(ts)
 
 # ─── 数据获取函数 ───────────────────────────────────────────────────────────
 
-def get_wan_status():
+def get_wan_status() -> dict:
     """获取 WAN 口状态（含 DNS 信息）"""
     result = {"wan": [], "online": False, "dns_servers": []}
     r = ikuai_call("wan", "show")
@@ -138,7 +157,7 @@ def get_wan_status():
         result["error"] = f"wan API: {r.get('message','?')}"
     return result
 
-def get_iface_traffic():
+def get_iface_traffic() -> dict:
     """获取各接口实时流量"""
     result = {"iface": []}
     r = ikuai_call("monitor_iface", "show", {"TYPE": "iface_stream"})
@@ -155,7 +174,7 @@ def get_iface_traffic():
             })
     return result
 
-def get_lan_info():
+def get_lan_info() -> dict:
     """获取 LAN 口信息"""
     result = {"lan": []}
     r = ikuai_call("lan", "show")
@@ -174,7 +193,7 @@ def get_lan_info():
             })
     return result
 
-def get_dhcp_leases():
+def get_dhcp_leases() -> dict:
     """获取 DHCP 租约列表（在线终端，使用 dhcp_lease API）"""
     result = {"leases": [], "total": 0, "static_total": 0}
     r = ikuai_call("dhcp_lease", "show")
@@ -201,7 +220,7 @@ def get_dhcp_leases():
         result["error"] = r.get("message", "DHCP lease API 调用失败")
     return result
 
-def get_arp_table():
+def get_arp_table() -> dict:
     """获取 ARP 表"""
     result = {"arp": [], "total": 0}
     r = ikuai_call("arp", "show")
@@ -220,7 +239,7 @@ def get_arp_table():
         result["total"] = len(result["arp"])
     return result
 
-def get_dns_config():
+def get_dns_config() -> dict:
     """获取 DNS 配置（从 WAN 信息中提取，因为 dns_forward API 被拒）"""
     result = {"wan_dns": [], "dhcp_dns": [], "error": None}
     wan_r = get_wan_status()
@@ -243,7 +262,7 @@ def get_dns_config():
             })
     return result
 
-def get_terminal_list():
+def get_terminal_list() -> dict:
     """获取在线终端列表（合并 DHCP 租约 + ARP）"""
     result = {"terminals": [], "total": 0, "by_interface": {}, "source": "dhcp_lease+arp"}
 
@@ -298,7 +317,7 @@ def get_terminal_list():
     result["by_interface"] = by_iface
     return result
 
-def get_dhcp_server_config():
+def get_dhcp_server_config() -> dict:
     """获取 DHCP 服务器配置"""
     result = {"configs": []}
     r = ikuai_call("dhcp_server", "show")
@@ -318,7 +337,7 @@ def get_dhcp_server_config():
             })
     return result
 
-def get_all_status():
+def get_all_status() -> dict:
     """获取所有状态，返回完整 dict"""
     result = {
         "timestamp":   int(time.time()),
@@ -380,16 +399,20 @@ def get_all_status():
 
 # ─── 辅助函数 ────────────────────────────────────────────────────────────────
 
-def _wan_status_str(code):
+def _wan_status_str(code: int) -> str:
     m = {0: "断开", 1: "拨号中", 2: "已连接", 3: "失败", 4: "正在断开"}
     return m.get(code, f"未知({code})")
 
-def _internet_str(code):
+def _internet_str(code: int) -> str:
     m = {0: "未检测", 1: "不通", 2: "通畅"}
     return m.get(code, f"未知({code})")
 
 # ─── 命令行入口 ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
     parser = argparse.ArgumentParser(description="爱快路由器监控脚本 v2")
     parser.add_argument("--monitor",   action="store_true", help="持续监控模式（每15秒）")
     parser.add_argument("--check",     action="store_true", help="快速检查（0=在线/1=离线）")
@@ -438,7 +461,7 @@ if __name__ == "__main__":
                 break
             except Exception as e:
                 print(f"[{ts}] 错误: {e}", flush=True)
-            time.sleep(15)
+            time.sleep(MONITOR_INTERVAL)
 
     elif args.check:
         s = get_wan_status()

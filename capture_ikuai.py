@@ -3,11 +3,18 @@
 iKuai 路由器 API 抓包脚本
 用 Selenium 打开真实浏览器 → 登录 → 抓所有 XHR 请求 → 打印出来
 """
-import json, time, hashlib
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+logger = logging.getLogger(__name__)
 
 # ── 配置 ───────────────────────────────────────────────────────────────────────
 IKUAI_URL   = "http://192.168.31.254"
@@ -15,7 +22,7 @@ USERNAME     = "admin"
 PASSWORD     = "lixin2324"
 # ─────────────────────────────────────────────────────────────────────────────────
 
-def main():
+def main() -> None:
     print("启动浏览器...")
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")          # 无头模式，设为 False 可看到界面
@@ -27,7 +34,7 @@ def main():
     # ── 启用 CDP 网络监听 ────────────────────────────────────────────────────
     driver.execute_cdp_cmd("Network.enable", {})
 
-    def capture_request(params):
+    def capture_request(params: dict) -> None:
         req = params.get("request", {})
         url = req.get("url", "")
         if "/Action/" in url:
@@ -42,7 +49,7 @@ def main():
             if req.get("postData"):
                 print(f"   Body: {req['postData'][:200]}")
 
-    def capture_response(params):
+    def capture_response(params: dict) -> None:
         resp = params.get("response", {})
         url = resp.get("url", "")
         if "/Action/" in url:
@@ -51,7 +58,8 @@ def main():
                 body = driver.execute_cdp_cmd("Network.getResponseBody",
                                               {"requestId": req_id})
                 body_text = body.get("body", "")[:300]
-            except:
+            except Exception as exc:
+                logger.debug("无法获取响应体: %s", exc)
                 body_text = "(无法获取响应体)"
             captured.append({
                 "type": "response",
@@ -110,4 +118,6 @@ def main():
         print("\n浏览器已关闭")
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
     main()

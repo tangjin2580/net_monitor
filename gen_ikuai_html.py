@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """生成新的 ikuai.html 监控页面（正确解析新 API 格式）"""
-import json
+import os
+
+# 输出路径：默认写到本脚本同目录下的 ikuai_new.html（避免硬编码绝对路径）
+OUTPUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ikuai_new.html")
 
 new_html = r'''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -220,7 +223,7 @@ setInterval(loadAll, 10000);
 print(f"新 IKUAI_HTML 长度: {len(new_html)} 字符")
 print("请手动替换 net_monitor_web.py 中的 IKUAI_HTML 变量")
 # 保存到文件供参考
-with open(r"G:\code\net_monitor\ikuai_new.html", "w", encoding="utf-8") as f:
+with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
     f.write(new_html)
-print(f"✅ 已保存到 G:\code\net_monitor\ikuai_new.html")
+print(f"✅ 已保存到 {OUTPUT_PATH}")
 print("在 net_monitor_web.py 中搜索 IKUAI_HTML = 并替换整个值")
