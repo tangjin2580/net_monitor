@@ -375,34 +375,21 @@ except Exception:
     pass
 ' "$url" "$platform" "$title" "$content" "$severity" "$event_type" "$hostname" "$time_str" "$secret" >/dev/null 2>&1 || true
 }
-# ─── DNS 污染检测 ────────────────────────────────────────────────────
-DNS_POLLUTION_RESOLVERS=(
-    "223.5.5.5"
-    "114.114.114.114"
-    "8.8.8.8"
-)
+# ─── DNS 服务器健康检测 ────────────────────────────────────────────────────
+# 直连自建 DNS 服务器，检测响应时间和可用性
+dns_probe() {
+    local dns_server="$1"
+    local domain="${2:-$DNS_HOST}"
+    local start end dur
 
-dns_pollution_detect() {
-    local domain="${1:-$DNS_HOST}"
-    local results=""
-    local first_ips=""
-    for resolver in "${DNS_POLLUTION_RESOLVERS[@]}"; do
-        local ips
-        ips=$(timeout 3 getent hosts "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ',')
-        [[ -z "$ips" ]] && ips=$(timeout 3 nslookup "$domain" "$resolver" 2>/dev/null \
-            | awk 'index($0, "Address:") == 1 { gsub(/#.*/, "", $2); if ($2 != "" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print $2 }' | sort -u | tr '\n' ',')
-        if [[ -z "$first_ips" ]]; then
-            first_ips="$ips"
-        elif [[ "$ips" != "$first_ips" && -n "$ips" && -n "$first_ips" ]]; then
-            if event_cooldown "dns_pollution" 300; then
-                log_err "[DNS_POLLUTION] 解析不一致! $domain | 期望: $first_ips | 实际($resolver): $ips"
-                send_webhook "DNS污染检测" "域名 $domain 在不同DNS服务器解析结果不一致" "critical" "dns_pollution"
-            fi
-            return 1
-        fi
-        results="${results}${resolver}=$ips "
-    done
-    return 0
+    start=$(date +%s%N)
+    if timeout 3 nslookup "$domain" "$dns_server" 2>/dev/null | grep -q "Address:"; then
+        end=$(date +%s%N); dur=$(( (end - start) / 1000000 ))
+        echo "OK:${dur}"
+    else
+        end=$(date +%s%N); dur=$(( (end - start) / 1000000 ))
+        echo "FAIL:${dur}"
+    fi
 }
 
 # ─── 链路质量评分 ────────────────────────────────────────────────────────────
@@ -767,7 +754,7 @@ service_diagnostic() {
     for ldns in 192.168.31.254 192.168.31.251; do
         local dns_start dns_end dns_dur
         dns_start=$(date +%s%N)
-        if timeout 3 getent hosts "$DNS_HOST" "$ldns" 2>/dev/null | grep -q "."; then
+        if timeout 3 nslookup "$DNS_HOST" "$ldns" 2>/dev/null | grep -q "Address:"; then
             dns_end=$(date +%s%N)
             dns_dur=$(( (dns_end - dns_start) / 1000000 ))
             log_info "[DIAG] 本地DNS解析|${ldns}|OK|${dns_dur}ms"
@@ -1275,26 +1262,31 @@ dns_monitor() {
         fi
 
         v6_start=$(date +%s%N)
-        if timeout 5 getent hosts "$DNS_HOST" 2400:3200::1 2>/dev/null | grep -q "."; then
+        if timeout 5 nslookup "$DNS_HOST" 2400:3200::1 2>/dev/null | grep -q "Address:"; then
             v6_end=$(date +%s%N); v6_dur=$(( (v6_end - v6_start) / 1000000 ))
             (( v6_dur > 2000 )) && log_warn "[DNS_V6_SLOW] IPv6 DNS ${v6_dur}ms"
         else
             v6_end=$(date +%s%N); v6_dur=$(( (v6_end - v6_start) / 1000000 ))
-            if timeout 5 nslookup "$DNS_HOST" 2400:3200::1 2>&1 | grep -q "Address:"; then
-                log_info "[DNS_V6] getent 失败但 nslookup 成功 (${v6_dur}ms)"
-            else
-                log_warn "[DNS_V6_FAIL] IPv6 DNS 失败 (${v6_dur}ms)"
-            fi
+            log_warn "[DNS_V6_FAIL] IPv6 DNS 失败 (${v6_dur}ms)"
         fi
 
         # v4 失败但 v6 成功 → 专项告警
         if ! timeout 5 getent hosts "$DNS_HOST" 2>/dev/null | grep -q "."; then
-            if timeout 5 getent hosts "$DNS_HOST" 2400:3200::1 2>/dev/null | grep -q "."; then
+            if timeout 5 nslookup "$DNS_HOST" 2400:3200::1 2>/dev/null | grep -q "Address:"; then
                 log_err "[DNS_V4_DOWN_V6_OK] IPv4 DNS 失败但 IPv6 DNS 正常!"
             fi
         fi
 
-        dns_pollution_detect "$DNS_HOST"
+        # 检测自建 DNS 服务器健康状态
+        for srv in 192.168.31.254 192.168.31.251; do
+            local result; result=$(dns_probe "$srv" "$DNS_HOST")
+            local status=${result%%:*}; local dur=${result##*:}
+            if [[ "$status" == "OK" ]]; then
+                (( dur > 500 )) && log_warn "[DNS_SRV_SLOW] DNS服务器 $srv 响应慢 ${dur}ms"
+            else
+                log_err "[DNS_SRV_DOWN] DNS服务器 $srv 无响应 (${dur}ms)"
+            fi
+        done
 
         sleep 20
     done
